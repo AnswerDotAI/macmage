@@ -15,7 +15,7 @@ classifiers = [
   "Programming Language :: Python :: 3 :: Only",
 ]
 
-dependencies = []
+dependencies = ['fastcore>=2.1.12', 'macimp>=0.1.0']
 
 [project.scripts]
 macmage = "macmage:main"
