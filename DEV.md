@@ -4,7 +4,7 @@ macmage runs a user's `config.py` as a launchd agent under [Imp](https://github.
 
 ## Verified 2026-07-27 (live, on this machine)
 
-These were verified under the pre-Imp stack (MacMage.app, pynput); the mechanisms carried over unchanged, but the rewired stack has not yet had a live install.
+These were verified under the pre-Imp stack (MacMage.app, pynput); the mechanisms carried over unchanged, and the Imp-based stack has been the live install since 2026-07-28.
 
 - The config-reload `execv` keeps pid and TCC trust; no re-prompt across reloads. `_reload_on_change` calls `stop_keys()` first, since `execv` skips atexit and a Carbon loop dying mid-run shadows layout queries system-wide.
 - A config.py that raises at import logs the traceback and the process stays alive waiting for the next change; no launchd respawn loop.
@@ -17,7 +17,8 @@ These were verified under the pre-Imp stack (MacMage.app, pynput); the mechanism
 
 ## Deferred ideas
 
-- `--status` doctor command: `launchctl print` state plus permission preflights, for when the venv path is gone and the agent cannot start at all.
+See `meta/FEATURES.md` for the candidate-feature list (and what was decided against).
+
 ## Role-model repos (shallow clones in ~/aai-ws/links)
 
 - `KeyboardShortcuts` (sindresorhus): registers `kEventHotKeyPressed` *and* `Released`; every registration has a deliberate unregister (tests use `defer`); the test suite never posts synthetic events - lifecycle is asserted via registration conflicts (`canRegisterHotKey`: try a competing registration, expect `eventHotKeyExistsErr`).
@@ -58,7 +59,7 @@ If this ever needs revisiting (e.g. layout-change notifications, dead keys), the
 
 ## Layout queries are flaky system-wide; never cache a failure
 
-`CGEventKeyboardGetUnicodeString` intermittently returns partial maps or nothing at all, in a fresh single-threaded process, correlating with adjacent keyboard-stack activity (an agent that just exited, a run seconds earlier) and with the first minute or two after login. Partial comes in more than one grade: ~22 of 52 keys with letters missing, and also (observed 2026-07-27, after `watch()` existed) letters present but punctuation missing, so "has 'a'" is not a sufficient validity check. skhd.zig documents the same family of flake for `CGEventTapCreate` at early login and retries; `char2vk` retries too (child process, up to 8 attempts, requiring letters AND >40 entries, never caching a bad map - `functools.cache` does not cache exceptions, so a failed call retries next time). The escalation fired the same day: after exhausted retries `char2vk` now falls back to a last-known-good map cached in `~/.cache/macimp/layout.json`, written on every good query. A shadow was observed lasting 15+ seconds across process boundaries, well past the ~2.4s retry budget, so the cache is what actually makes daemons at login and back-to-back test runs reliable. The known cost: a layout switch during a flake window can serve the old layout's map once.
+`CGEventKeyboardGetUnicodeString` intermittently returns partial maps or nothing at all, in a fresh single-threaded process, correlating with adjacent keyboard-stack activity (an agent that just exited, a run seconds earlier) and with the first minute or two after login. Partial comes in more than one grade: ~22 of 52 keys with letters missing, and also (observed 2026-07-27, after `watch()` existed) letters present but punctuation missing, so "has 'a'" is not a sufficient validity check. skhd.zig documents the same family of flake for `CGEventTapCreate` at early login and retries; `char2vk` retries too (child process, up to 8 attempts, requiring letters AND >40 entries, never caching a bad map - `functools.cache` does not cache exceptions, so a failed call retries next time). The escalation fired the same day: after exhausted retries `char2vk` now falls back to a last-known-good map cached in `~/.cache/macmage/layout.json`, written on every good query. A shadow was observed lasting 15+ seconds across process boundaries, well past the ~2.4s retry budget, so the cache is what actually makes daemons at login and back-to-back test runs reliable. The known cost: a layout switch during a flake window can serve the old layout's map once.
 
 A major aggravator was our own exits: a daemon thread running `RunApplicationEventLoop` dies mid-loop at interpreter shutdown, and for seconds afterwards layout queries system-wide return partial maps (observed as back-to-back pytest runs failing where isolated runs passed). The fix is graceful teardown: `_stop()` at `atexit` unregisters every hotkey and calls `QuitApplicationEventLoop()`. The tap thread gets the same treatment: `_stop()` disables the tap and `CFRunLoopStop`s its runloop, since a CFRunLoop thread carrying a tap dying mid-run at interpreter exit is the same pattern (shadowing resumed after `watch()` was added and back-to-back runs failed again; with teardown plus the disk cache, six consecutive suite runs pass).
 

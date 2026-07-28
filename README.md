@@ -35,9 +35,9 @@ from macmage import mage, type_text
 def backticks(): type_text('`​``')
 ```
 
-`@mage` wraps a handler so an exception is logged instead of stopping the process, and `keys` binds it to one or more global hotkeys, named as described under Hotkeys below. `hold=True` takes a generator instead, for handlers that run while the key is held.
+`backticks` here is a cantrip: a small function bound to a trigger, which is all any macmage configuration is. The triggers are hotkeys (`keys=`), held modifiers (`holdmod`), leader keys (`leader`), and clipboard changes (`watch_clip`); the actions are whatever Python you like, with typing, clipboard, application, and panel helpers below. `@mage` wraps a cantrip so an exception is logged instead of stopping the process. `hold=True` takes a generator instead, for cantrips that run while the key is held. The `cantrips/` directory in the repo holds ready-made ones, written to be copied next to `config.py` and imported from it.
 
-`config.py` need not block. `macmage` keeps the process alive, and re-executes it whenever any `.py` file in the configuration directory changes, so a bare `touch` reloads it. An error while loading it is logged to `stderr.log`, and the process waits for the next change rather than exiting. The configuration can import sibling files from its directory as ordinary Python modules.
+`config.py` need not block. `macmage` keeps the process alive, and re-executes it whenever any `.py` file in the configuration directory changes, so a bare `touch` reloads it. An error while loading it is logged to `stderr.log` and shown in a panel with the traceback, and the process waits for the next change rather than exiting, so the answer to "did my save load?" is that a panel means no. The configuration can import sibling files from its directory as ordinary Python modules.
 
 To run the same configuration in the foreground, use `Imp macmage` rather than bare `macmage`. Started directly from a terminal, macOS treats the process as the terminal, so it has your terminal's permissions instead of Imp's.
 
@@ -136,20 +136,24 @@ open_app('Ghostty')
 
 `get_clip` returns the clipboard's text, or `None` when it holds none. `set_clip` replaces it, dropping every other representation, so styled text put through `set_clip(get_clip())` pastes plain. `map_clip(f)` is the pair of them: it replaces the clipboard with `f` applied to its text, and does nothing when the clipboard holds none. None of them needs a permission, which makes clipboard rewriting the cheapest kind of shortcut to write: read it, change it, put it back, and nothing else on the desktop is disturbed.
 
+`watch_clip(fn)` calls `fn` with the clipboard's new text after every change, polling `changeCount` twice a second, and `unwatch_clip(fn)` stops it. Copies marked concealed or transient, the convention password managers use, are never reported, so a recorder built on it cannot capture passwords. `cantrips/clipboard_history.py` is the worked example: it remembers what you copy and offers the last ten through `pick` on a hotkey.
+
 `open_url` opens a URL in whichever application handles it, custom schemes included. `open_app` takes an application's name the way `open -a` does, launches it if it is not running, and brings it to the front if it is, which covers what a launcher shortcut usually does. An unknown name raises `ValueError`.
 
 ## Telling you something
 
 ```python
-from macmage import alert, notify
+from macmage import alert, notify, pick, show
 
 notify('macmage', 'clipboard cleaned')
 if alert('Delete everything?', 'This cannot be undone.', 'Delete', 'Cancel') == 0: wipe()
+show('macmage logs', log_text)
+if (i := pick('Reply with', ['thanks!', 'on it', 'ship it'])) is not None: type_text(replies[i])
 ```
 
-A background agent has nowhere to print, and macOS will not let an unbundled process speak to the user at all: Notification Center refuses a process with no bundle, and a window needs an application to own it. Both of these go through Imp, which has both. `notify` takes about 20ms, returns whether the notification went out, and needs Imp's `notifications` permission, so `Imp --grant notifications` once. `alert` shows a message box and returns the index of the button pressed, defaulting to a single `OK`.
+A background agent has nowhere to print, and macOS will not let an unbundled process speak to the user at all: Notification Center refuses a process with no bundle, and a window needs an application to own it. These helpers hand the job to Imp, which is one. `notify` posts a banner and returns at once. `alert` waits and returns the button index. `show` displays text monospaced, scrollable, and selectable, so long output needs neither an alert's single box nor the clipboard. `pick` shows a numbered menu, returns the chosen index, and returns `None` when dismissed; a leader keymap's actions read better through it than as blind letters. Esc or the close button dismisses any of them.
 
-`alert` blocks until you dismiss it, and handlers share one worker thread, so every other hotkey waits behind an alert that is still on screen.
+`alert`, `show`, and `pick` block until dismissed, and handlers share one worker thread, so every other hotkey waits behind a panel that is still on screen.
 
 
 ## Permissions
@@ -174,7 +178,7 @@ ok   layout: 52 keys cached at /Users/you/.cache/macmage/layout.json
 
 The `paths` check catches a failure with no other symptom. The plist names an absolute path to the virtual environment's `python`, so moving or rebuilding that environment stops the agent from starting at all, silently. Re-run `macmage --install` to point it at the current one.
 
-The agent writes stdout and stderr under `$XDG_STATE_HOME/macmage`, normally `~/.local/state/macmage`:
+The agent writes stdout and stderr under `$XDG_STATE_HOME/macmage`, normally `~/.local/state/macmage`, and starts each run with a `--- <timestamp> macmage <version> started ---` marker line, so the log reads in eras:
 
 ```bash
 tail -f ~/.local/state/macmage/stdout.log ~/.local/state/macmage/stderr.log

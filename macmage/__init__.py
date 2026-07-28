@@ -56,6 +56,7 @@ def _reload_on_change(path):
 
 
 def run():
+    print(f'--- {time.strftime("%F %T")} macmage {__version__} started, watching {config_dir} ---', file=sys.stderr, flush=True)
     threading.excepthook = lambda a: _log_exc(a.exc_value, f'thread {a.thread.name}')
     sys.excepthook = lambda t,v,tb: _log_exc(v, 'main thread')
     config_dir.mkdir(parents=True, exist_ok=True)
@@ -63,7 +64,13 @@ def run():
     watcher.start()
     sys.path.insert(0, str(config_dir))
     try: importlib.import_module('config')
-    except Exception as e: _log_exc(e, 'config')
+    except Exception as e:
+        _log_exc(e, 'config')
+        # The panel is the answer to "did my save load?": blocking is fine, since the watcher
+        # thread reloads by execv regardless. The log already has the traceback, so a display
+        # failure (e.g. Imp missing) must not take down the process that waits for the fix.
+        try: show(f'macmage: config.py failed to load at {time.strftime("%T")}', ''.join(traceback.format_exception(e)))
+        except Exception: pass
     watcher.join()
 
 def _st_imp():
