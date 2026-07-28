@@ -1,63 +1,198 @@
 # macmage
 
-`macmage` runs `$XDG_CONFIG_HOME/macmage/config.py` as ordinary Python in a background macOS LaunchAgent. `XDG_CONFIG_HOME` defaults to `~/.config`. The configuration can use any package installed in the same virtual environment.
+`macmage` runs `$XDG_CONFIG_HOME/macmage/config.py` as ordinary Python in a background macOS LaunchAgent, and provides the keyboard automation that configuration usually wants: global hotkeys, keystroke watching, and synthetic typing. `XDG_CONFIG_HOME` defaults to `~/.config`, and the configuration can use any package installed in the same virtual environment.
+
+The keyboard functions work anywhere, agent or not, so `macmage` is usable as a plain library too.
 
 ## Install
 
-Install `macmage` in an activated virtual environment, then register its LaunchAgent:
+Permissions on macOS belong to a program, not to a script, so `macmage` runs under [Imp](https://github.com/AnswerDotAI/imp), a small signed app that holds the grants and passes them to whatever it launches. Install Imp first, and grant it Accessibility, which is what synthetic typing and keystroke watching need:
 
 ```bash
-pip install macmage
+curl -fsSL https://raw.githubusercontent.com/AnswerDotAI/imp/main/install.sh | sh
+Imp --grant accessibility
+```
+
+Then install `macmage` into a virtual environment and register its LaunchAgent:
+
+```bash
+pip install git+https://github.com/AnswerDotAI/macmage.git
 macmage --install
 ```
 
-`macmage --install` writes `~/Library/LaunchAgents/com.answerdotai.macmage.plist`, which runs the current virtual environment's `python` under `Imp.app`, the signed launcher bundle from the `macimp` package (built on first install; compiling it uses the Xcode Command Line Tools, which macOS offers to install if missing). Running `--install` again replaces the LaunchAgent definition. It does not create or modify `config.py`.
+`macmage --install` writes `~/Library/LaunchAgents/com.answerdotai.macmage.plist`, which runs the current virtual environment's `python` under Imp. It is also how you restart the agent: run it again after upgrading `macmage` or Imp, after granting a permission, and after moving or rebuilding the virtual environment, since the plist names an absolute path. It never creates or modifies `config.py`.
 
-`macmage --uninstall` stops the agent and removes its plist. It leaves the configuration, logs, `Imp.app`, and its permission grants untouched.
+`macmage --status` checks the whole arrangement, and `macmage --uninstall` stops the agent and removes its plist, leaving the configuration, logs, `Imp.app`, and its permission grants alone.
 
 ## Configure
 
 Create `$XDG_CONFIG_HOME/macmage/config.py`, normally `~/.config/macmage/config.py`. This example binds Alt-` to type a backtick, a zero-width space, and two more backticks:
 
 ```python
-from macimp import type_text
-from macmage import mage
+from macmage import mage, type_text
 
 @mage(keys='alt-`')
 def backticks(): type_text('`​``')
 ```
 
-`@mage` wraps a handler so an exception is logged instead of stopping the process; `keys` also binds the handler to one or more global hotkeys through `macimp`. Combos name keys as typed on the current layout (`'alt-`'`, `'ctrl-shift-space'`, `'cmd-alt-t'`), and `'alt-<50>'` names a raw key code directly. The bound keystroke is suppressed system-wide, so it does not reach the frontmost app. `config.py` need not block: macmage keeps the process alive, and restarts it when any `.py` file in the configuration directory changes (a bare `touch` suffices). An error while loading `config.py` is logged, and the process waits for the next change to reload. The configuration can import sibling files from its directory through normal Python imports.
+`@mage` wraps a handler so an exception is logged instead of stopping the process, and `keys` binds it to one or more global hotkeys, named as described under Hotkeys below. `hold=True` takes a generator instead, for handlers that run while the key is held.
 
-Run `macmage` without arguments to use the same configuration in the foreground.
+`config.py` need not block. `macmage` keeps the process alive, and re-executes it whenever any `.py` file in the configuration directory changes, so a bare `touch` reloads it. An error while loading it is logged to `stderr.log`, and the process waits for the next change rather than exiting. The configuration can import sibling files from its directory as ordinary Python modules.
+
+To run the same configuration in the foreground, use `Imp macmage` rather than bare `macmage`. Started directly from a terminal, macOS treats the process as the terminal, so it has your terminal's permissions instead of Imp's.
+
+## Hotkeys
+
+```python
+from macmage import hotkey
+
+@hotkey('ctrl-alt-cmd-t')
+def hello(): print('pressed')
+```
+
+Hotkeys go through Carbon's `RegisterEventHotKey`, so they need no macOS permission at all, and the bound keystroke is suppressed system-wide rather than reaching the frontmost app.
+
+Combos name keys as typed on the current keyboard layout (`'cmd-alt-`'`, `'ctrl-shift-space'`). They can also name special keys such as `'esc'`, `'f5'` and `'left'` (see `specials`), or a raw key code as `'alt-<50>'`. Registering a combo again replaces its handler, and `unhotkey(combo)` releases it.
+
+The event loop runs on a background thread started at first registration, so hotkeys work in a notebook or script as well as in a daemon. Handlers run on a worker thread, so a slow handler delays later hotkeys but never the system's keyboard. Everything is released at process exit. A process that replaces itself with `os.exec*` skips that, so call `stop_keys()` first.
+
+To do something for as long as a key is held, pass `hold=True` and write the handler as a generator. The body before its `yield` runs on the press, and the rest on the release.
+
+```python
+@hotkey('ctrl-alt-cmd-r', hold=True)
+def record():
+    rec = start_recording()
+    yield
+    rec.stop()
+```
+
+The generator runs on its own thread and waits at the `yield`, so a body that blocks for the length of the hold cannot stall other hotkeys, and whatever it holds between the two halves stays an ordinary local variable. Carbon repeats nothing, so a long hold is exactly one press and one release. To handle the two edges separately instead, pass `up=`, as in `hotkey(combo, on_press, up=on_release)`.
+
+A bare modifier such as right Option cannot be a Carbon hotkey, so `holdmod` reads the event tap instead, and takes the same handlers:
+
+```python
+from macmage import holdmod
+
+@holdmod('ropt', hold=True)
+def talk():
+    rec = start_recording()
+    yield
+    rec.stop()
+```
+
+`modkeys` lists the names, which are a side plus a modifier (`'ropt'`, `'lshift'`, `'rcmd'`), plus `'fn'`. Unlike `hotkey`, `holdmod` needs an Accessibility grant, and it cannot suppress the key, so the modifier still reaches whatever is focused. `unholdmod(name)` stops it.
+
+## Modes
+
+A leader key captures the next keystroke, so a family of related commands costs one combination instead of one each:
+
+```python
+from functools import partial
+from macmage import leader, map_clip
+
+leader('ctrl-alt-cmd-c', {
+    'u': partial(map_clip, str.upper),
+    'l': partial(map_clip, str.lower)})
+```
+
+While the mode is active its keys are registered as bare hotkeys, so they are suppressed rather than typed, and one press runs its handler and releases them again. `escape` leaves without running anything, and so does waiting out `timeout`, which defaults to three seconds, so a stray leader press can never leave the keyboard captured. Entering a mode takes a few milliseconds, well under the gap between two deliberate keystrokes. `unleader(combo)` releases the leader itself.
+
+The keys are ordinary combinations rather than single letters, so a mode can bind `'cmd-s'` as readily as `'s'`.
+
+
+## Watching keystrokes
+
+```python
+from macmage import watch
+
+@watch
+def log(kind, vk, flags): print(kind, vk, flags)
+```
+
+`watch` reports every key event system-wide through a listen-only event tap. `kind` is `'down'`, `'up'`, or `'flags'` (a modifier change), `vk` the key code, and `flags` the modifier mask. It observes without consuming, so every event still reaches its application, including combos a `hotkey` in the same process claims. `unwatch(fn)` stops the reports. Watching needs an Accessibility grant.
+
+## Typing
+
+```python
+from macmage import press, type_text
+
+type_text('Hello from macmage\n')
+press('cmd-s')
+```
+
+`type_text` types a string into the focused application. `press` sends one key combination. Both need an Accessibility grant, and raise `ImpError` when it is missing rather than failing silently, since macOS drops unauthorized synthetic events without an error.
+
+`type_text` waits, for up to a second, until no modifier key is physically held. Applications read live modifier state when interpreting its events, so text typed while the triggering hotkey is still down arrives mangled or not at all. In practice a hotkey handler that types will do so the moment you let go of the combination.
+
+## The clipboard, and opening things
+
+```python
+from macmage import get_clip, set_clip, open_url, open_app
+
+set_clip(get_clip().upper())
+open_url('https://example.com')
+open_app('Ghostty')
+```
+
+`get_clip` returns the clipboard's text, or `None` when it holds none. `set_clip` replaces it, dropping every other representation, so styled text put through `set_clip(get_clip())` pastes plain. `map_clip(f)` is the pair of them: it replaces the clipboard with `f` applied to its text, and does nothing when the clipboard holds none. None of them needs a permission, which makes clipboard rewriting the cheapest kind of shortcut to write: read it, change it, put it back, and nothing else on the desktop is disturbed.
+
+`open_url` opens a URL in whichever application handles it, custom schemes included. `open_app` takes an application's name the way `open -a` does, launches it if it is not running, and brings it to the front if it is, which covers what a launcher shortcut usually does. An unknown name raises `ValueError`.
+
+## Telling you something
+
+```python
+from macmage import alert, notify
+
+notify('macmage', 'clipboard cleaned')
+if alert('Delete everything?', 'This cannot be undone.', 'Delete', 'Cancel') == 0: wipe()
+```
+
+A background agent has nowhere to print, and macOS will not let an unbundled process speak to the user at all: Notification Center refuses a process with no bundle, and a window needs an application to own it. Both of these go through Imp, which has both. `notify` takes about 20ms, returns whether the notification went out, and needs Imp's `notifications` permission, so `Imp --grant notifications` once. `alert` shows a message box and returns the index of the button pressed, defaulting to a single `OK`.
+
+`alert` blocks until you dismiss it, and handlers share one worker thread, so every other hotkey waits behind an alert that is still on screen.
+
 
 ## Permissions
 
-Hotkeys need no permission at all. Synthetic typing (`macimp.type_text` and `macimp.press`) needs Accessibility, granted once to `Imp.app`, the signed launcher every macimp-based agent runs under. macimp checks at each call and logs anything missing to `stderr.log`, and because `Imp.app` is signed with a stable identity, the grant survives package upgrades and virtual environment moves. For other permissions your automation needs, call `require` at the top of `config.py`:
+Hotkeys need no permission at all, because macOS delivers a registered hotkey without showing the process anything else. Everything that reads or writes the keyboard more broadly needs Accessibility: `type_text`, `press`, `watch`, and `holdmod`.
 
-```python
-from macimp import require
-require('input_monitoring')
+That grant belongs to Imp rather than to `macmage` or to your virtual environment, and `Imp --grant accessibility` is how to get it. macOS ties the grant to Imp's bundle identifier and signing team rather than to a hash of its binary, so it survives package upgrades, virtual environment moves, and new versions of Imp itself. Anything `macmage` does that needs a permission raises `ImpError` when it is missing, naming the command to run.
+
+A permission applies only to processes started after it was granted, so run `macmage --install` once you have granted it. Saving `config.py` is not enough here, since that reloads the configuration without restarting the process the grant attaches to.
+
+## Checking on it
+
+`macmage --status` reports on everything the agent depends on, and exits non-zero if any of it is missing:
+
+```
+ok   imp: installed, with accessibility granted
+ok   agent: com.answerdotai.macmage loaded, pid 41605
+ok   paths: every program the plist names exists
+ok   config: /Users/you/.config/macmage/config.py, with no error logged since its last edit
+ok   layout: 52 keys cached at /Users/you/.cache/macmage/layout.json
 ```
 
-## Logs
+The `paths` check catches a failure with no other symptom. The plist names an absolute path to the virtual environment's `python`, so moving or rebuilding that environment stops the agent from starting at all, silently. Re-run `macmage --install` to point it at the current one.
 
-The LaunchAgent writes stdout and stderr under `$XDG_STATE_HOME/macmage`, normally `~/.local/state/macmage`:
+The agent writes stdout and stderr under `$XDG_STATE_HOME/macmage`, normally `~/.local/state/macmage`:
 
 ```bash
 tail -f ~/.local/state/macmage/stdout.log ~/.local/state/macmage/stderr.log
 ```
 
-Restart the installed agent with:
+Saving `config.py` reloads the configuration, which is all that is needed while editing handlers. It re-executes the Python process only, leaving the Imp launcher that owns the permissions in place, so a new version of `macmage` or of Imp, and a permission granted since the agent started, all need the agent itself restarted:
 
 ```bash
-launchctl kickstart -k gui/$(id -u)/com.answerdotai.macmage
+macmage --install
 ```
 
 ## Development
 
 ```bash
 pip install -e .[dev]
+Imp pytest
 ```
 
-The package version lives in `macmage/__init__.py`. Use `ship-bump` to bump it and `ship-release` to publish a release.
+The tests drive real macOS APIs rather than fakes, registering hotkeys and posting synthetic keystrokes at themselves, so run them under `Imp`. Started from a terminal they would otherwise use the terminal's permissions. `DEV.md` records the macOS behaviour the package is built around, which is worth reading before changing `keys.py`.
+
+The package version is in `macmage/__init__.py`. Use `ship-bump` to bump it and `ship-release` to publish a release.

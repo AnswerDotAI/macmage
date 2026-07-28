@@ -15,7 +15,8 @@ classifiers = [
   "Programming Language :: Python :: 3 :: Only",
 ]
 
-dependencies = ['fastcore>=2.1.12', 'macimp>=0.1.0']
+dependencies = ['fastcore>=2.1.12', 'pyobjc-framework-Cocoa>=12.2.1', 'pyobjc-framework-Quartz>=12.2.1',
+    'pyobjc-framework-ApplicationServices>=12.2.1']
 
 [project.scripts]
 macmage = "macmage:main"
@@ -35,3 +36,7 @@ version = { attr = "macmage.__version__" }
 
 [tool.setuptools.packages.find]
 include = ["macmage"]
+
+[tool.pytest.ini_options]
+markers = ["visible: puts something on screen; deselected by default"]
+addopts = "-m 'not visible'"
