@@ -19,7 +19,7 @@ def alert(
     *buttons:str # Button titles, left to right; one `OK` button when none are given
 ):
     "Show a message box and wait, returning the index of the button pressed. Blocks the handler until it is dismissed"
-    return Imp(alert=(title, body, *buttons)).returncode
+    return Imp(alert=(title, body, *buttons), timeout=None).returncode
 
 
 def pick(
@@ -27,7 +27,7 @@ def pick(
     items:list, # Up to ten choices, shown with their digits
 ):
     "Show a numbered menu and wait, returning the chosen index, or None when dismissed. Blocks the handler until answered"
-    r = Imp(pick=(title, *items))
+    r = Imp(pick=(title, *items), timeout=None)
     return int(r.stdout) if r.returncode == 0 else None
 
 
@@ -36,4 +36,4 @@ def show(
     text:str, # What to display, monospaced and selectable
 ):
     "Show text in a scrollable panel and wait until it is dismissed"
-    Imp(show=title, input=text)
+    Imp(show=title, input=text, timeout=None)

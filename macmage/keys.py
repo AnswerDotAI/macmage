@@ -3,7 +3,8 @@
 from fastcore.utils import *
 from fastcore.xdg import xdg_cache_home
 import atexit, inspect, json, objc, queue, re, struct, subprocess, sys, threading, time, traceback
-from Quartz import (CFMachPortCreateRunLoopSource, CFRunLoopAddSource, CFRunLoopGetCurrent, CFRunLoopRun, CFRunLoopStop,
+from Quartz import (CFMachPortCreateRunLoopSource, CFRunLoopAddSource, CFRunLoopGetCurrent, CFRunLoopGetMain,
+    CFRunLoopPerformBlock, CFRunLoopWakeUp, CFRunLoopRun, CFRunLoopStop,
     CGEnableEventStateCombining, CGEventCreateKeyboardEvent, CGEventGetFlags, CGEventGetIntegerValueField, CGEventKeyboardSetUnicodeString,
     CGEventMaskBit, CGEventPost, CGEventSetFlags, CGEventSourceFlagsState, CGEventTapCreate, CGEventTapEnable, kCFRunLoopCommonModes,
     kCGEventFlagMaskAlternate, kCGEventFlagMaskCommand, kCGEventFlagMaskControl, kCGEventFlagMaskShift,
@@ -16,7 +17,7 @@ from ._hitoolbox import (EventTypeSpec, GetEventDispatcherTarget, GetEventKind, 
 from .imp import need
 from .util import wait_until
 
-__all__ = ['mods', 'specials', 'char2vk', 'parse_combo', 'hotkey', 'unhotkey', 'leader', 'unleader', 'watch', 'unwatch', 'modkeys', 'holdmod', 'unholdmod', 'press', 'stop_keys', 'type_text']
+__all__ = ['mods', 'specials', 'char2vk', 'parse_combo', 'hotkey', 'unhotkey', 'leader', 'unleader', 'watch', 'unwatch', 'modkeys', 'holdmod', 'unholdmod', 'press', 'stop_keys', 'run_loop', 'type_text']
 
 mods = dict(cmd=256, command=256, shift=512, opt=2048, option=2048, alt=2048, ctrl=4096, control=4096)
 
@@ -90,7 +91,7 @@ def parse_combo(
 
 
 _handlers, _refs, _work, _lock = {}, {}, queue.Queue(), threading.Lock()
-_next_id, _started, _worker_started, _tap_started, _handler_ref, _cb = 0, False, False, False, None, None
+_next_id, _started, _own_loop, _worker_started, _tap_started, _handler_ref, _cb = 0, False, False, False, False, None, None
 
 
 def _handle(callref, event, void):
@@ -123,14 +124,22 @@ def _ensure_worker():
 def stop_keys():
     "Shut down the keyboard engine, releasing every hotkey and stopping the tap and event loop. Runs at exit; call it yourself before `os.exec*`, which skips atexit (see DEV.md)"
     for combo in list(_refs): unhotkey(combo)
-    QuitApplicationEventLoop()
+    _quit_loop()
     if _tap: CGEventTapEnable(_tap, False)
     if _tap_rl: CFRunLoopStop(_tap_rl)
     if _tap_thread: _tap_thread.join(1)
 
 
+def _quit_loop():
+    "Quit the Carbon event loop from any thread. Cross-thread, `QuitApplicationEventLoop` is a no-op: its quit event only takes effect posted from the loop's own thread, so schedule it there (see DEV.md)"
+    if not _own_loop or threading.current_thread() is threading.main_thread(): QuitApplicationEventLoop()
+    else:
+        CFRunLoopPerformBlock(CFRunLoopGetMain(), kCFRunLoopCommonModes, lambda: QuitApplicationEventLoop())
+        CFRunLoopWakeUp(CFRunLoopGetMain())
+
+
 def _start():
-    "Install the Carbon handler and start the event loop and worker threads, once per process"
+    "Install the Carbon handler and start the worker thread, plus the background event-loop thread unless `run_loop` owns the loop; once per process"
     global _started, _handler_ref, _cb
     if _started: return
     @objc.callbackFor(InstallEventHandler)
@@ -139,9 +148,21 @@ def _start():
     res, _handler_ref = InstallEventHandler(GetEventDispatcherTarget(), _cb, 2, specs, None, None)
     if res: raise RuntimeError(f'InstallEventHandler failed: {res}')
     _ensure_worker()
-    threading.Thread(target=RunApplicationEventLoop, daemon=True).start()
-    time.sleep(0.25)  # the loop initialises Text Services at entry; posting during that window aborts the process (see DEV.md)
+    if not _own_loop:
+        threading.Thread(target=RunApplicationEventLoop, daemon=True).start()
+        time.sleep(0.25)  # the loop initialises Text Services at entry; posting during that window aborts the process (see DEV.md)
     _started = True
+
+
+def run_loop(
+    setup:callable=None # Runs first, with the background loop disabled, so its registrations deliver via the loop below
+):
+    "Run the Carbon event loop on the calling thread until `stop_keys` quits it: the agent's arrangement, under which main-queue delegates (e.g. `snap_py`'s) fire without pumping, unlike the background-loop arrangement `hotkey` starts on its own (see DEV.md)"
+    global _own_loop
+    _own_loop = True
+    if setup: setup()
+    _start()
+    RunApplicationEventLoop()
 
 
 def _hold_pair(fn):

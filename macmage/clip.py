@@ -34,11 +34,12 @@ def map_clip(
 _clip_watchers = []
 
 
-def _clip_poll():
+def _clip_poll(
+    last:int # The pasteboard's changeCount when watching began, read before this thread starts so no change can hide in the gap
+):
     # There is no clipboard-change notification on macOS; polling `changeCount` is the
     # sanctioned mechanism, and the check is microseconds.
     pb = NSPasteboard.generalPasteboard()
-    last = pb.changeCount()
     while _clip_watchers:
         time.sleep(0.5)
         c = pb.changeCount()
@@ -54,7 +55,8 @@ def watch_clip(
 ):
     "Report clipboard changes to `fn`, skipping copies marked concealed or transient (passwords). Usable as a decorator; needs no permission"
     _clip_watchers.append(fn)
-    if len(_clip_watchers) == 1: threading.Thread(target=_clip_poll, daemon=True).start()
+    if len(_clip_watchers) == 1:
+        threading.Thread(target=_clip_poll, args=(NSPasteboard.generalPasteboard().changeCount(),), daemon=True).start()
     return fn
 
 

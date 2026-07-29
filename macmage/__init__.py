@@ -2,10 +2,11 @@ from fastcore.utils import *
 from fastcore.xdg import *
 from fastcore.script import call_parse
 import importlib, inspect, json, plistlib, re, select, threading, time, traceback
+from .util import *
 from .app import *
 from .clip import *
 from .keys import *
-from .keys import _layout_cache
+from .keys import _layout_cache, _quit_loop
 from .ui import *
 from .pim import *
 from .media import *
@@ -53,8 +54,21 @@ def _reload_on_change(path):
     flags = select.KQ_NOTE_WRITE | select.KQ_NOTE_ATTRIB | select.KQ_NOTE_RENAME | select.KQ_NOTE_DELETE
     events = [select.kevent(o, filter=select.KQ_FILTER_VNODE, flags=select.KQ_EV_ADD | select.KQ_EV_ONESHOT, fflags=flags) for o in fds]
     select.kqueue().control(events, 1)
-    stop_keys()  # execv skips atexit, and a Carbon loop dying mid-run shadows layout queries system-wide (see DEV.md)
-    os.execv(run_args[0], run_args)
+    _quit_loop()  # `run` reloads on the main thread once its loop exits
+
+
+def _load_config():
+    sys.path.insert(0, str(config_dir))
+    try: importlib.import_module('config')
+    except Exception as e:
+        _log_exc(e, 'config')
+        # The panel is the answer to "did my save load?", shown from a thread so the loop below
+        # still runs and the watcher's reload still works. The log already has the traceback, so
+        # a display failure (e.g. Imp missing) must not take down the process that waits for the fix.
+        def _show():
+            try: show(f'macmage: config.py failed to load at {time.strftime("%T")}', ''.join(traceback.format_exception(e)))
+            except Exception: pass
+        threading.Thread(target=_show, daemon=True).start()
 
 
 def run():
@@ -62,18 +76,10 @@ def run():
     threading.excepthook = lambda a: _log_exc(a.exc_value, f'thread {a.thread.name}')
     sys.excepthook = lambda t,v,tb: _log_exc(v, 'main thread')
     config_dir.mkdir(parents=True, exist_ok=True)
-    watcher = threading.Thread(target=_reload_on_change, args=(config_dir,), daemon=True)
-    watcher.start()
-    sys.path.insert(0, str(config_dir))
-    try: importlib.import_module('config')
-    except Exception as e:
-        _log_exc(e, 'config')
-        # The panel is the answer to "did my save load?": blocking is fine, since the watcher
-        # thread reloads by execv regardless. The log already has the traceback, so a display
-        # failure (e.g. Imp missing) must not take down the process that waits for the fix.
-        try: show(f'macmage: config.py failed to load at {time.strftime("%T")}', ''.join(traceback.format_exception(e)))
-        except Exception: pass
-    watcher.join()
+    threading.Thread(target=_reload_on_change, args=(config_dir,), daemon=True).start()
+    run_loop(_load_config)  # config registrations deliver via the main-thread loop (see DEV.md)
+    stop_keys()  # execv skips atexit, and a Carbon loop dying mid-run shadows layout queries system-wide (see DEV.md)
+    os.execv(run_args[0], run_args)
 
 def _st_imp():
     "Whether Imp is installed and granted what the agent needs, asked of Imp so a terminal's own grants cannot answer"

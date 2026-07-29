@@ -4,13 +4,15 @@ import tempfile, threading, time
 from datetime import datetime
 
 from fastcore.utils import *
-from AVFoundation import AVAudioRecorder, AVFormatIDKey, AVNumberOfChannelsKey, AVSampleRateKey
-from Foundation import NSOperationQueue, NSSortDescriptor, NSURL
+from AVFoundation import (AVAudioRecorder, AVCaptureDevice, AVCaptureDeviceInput, AVCapturePhotoOutput,
+    AVCapturePhotoSettings, AVCaptureSession, AVFormatIDKey, AVMediaTypeVideo, AVNumberOfChannelsKey, AVSampleRateKey)
+from Foundation import NSDate, NSDefaultRunLoopMode, NSObject, NSOperationQueue, NSRunLoop, NSSortDescriptor, NSURL
 from Photos import PHAsset, PHFetchOptions, PHImageManager, PHImageRequestOptions
 
-from .imp import Imp, need
+from .imp import need
+from .util import apart
 
-__all__ = ['photos', 'save_photo', 'snap', 'record', 'transcribe']
+__all__ = ['photos', 'save_photo', 'snap', 'snap_py', 'record', 'transcribe']
 
 
 def _phdict(a):
@@ -56,10 +58,48 @@ def save_photo(
 def snap(
     path=None # Where to write the still; a temp file if None
 ):
-    "Capture a photo from the default camera via `Imp --snap`, returning the path"
+    "Capture a photo from the default camera in a fresh process (`apart`), returning the path"
+    return apart(snap_py, path, timeout=15)  # capture takes a couple of seconds, so the default is roomier still
+
+
+# The pyobjc capture that `snap` runs in a fresh process via `apart`: in-process it cannot
+# coexist with the hotkey engine's *background* Carbon loop, which breaks main-run-loop pumping
+# (see DEV.md), though under `keys.run_loop` (the agent's arrangement) it works with no pumping.
+# `Imp --snap` remains as the sample bytes-over-stdout Swift verb until another replaces it.
+class _SnapDelegate(NSObject):
+    def captureOutput_didFinishProcessingPhoto_error_(self, o, photo, error):
+        self.data = photo.fileDataRepresentation()
+        self.done = True
+
+
+def snap_py(
+    path=None # Where to write the still; a temp file if None
+):
+    "Capture a photo from the default camera with pyobjc directly, returning the path"
+    need('camera')
+    from . import keys
+    if keys._started and not keys._own_loop: raise RuntimeError('the hotkey engine is running its background Carbon loop, which breaks main-run-loop pumping, so the photo delegate can never arrive (see DEV.md); use snap(), or run under keys.run_loop')
     path = Path(path or tempfile.mktemp(suffix='.jpg'))
-    r = Imp(snap=path)
-    if r.returncode: raise RuntimeError(r.stdout.strip() or 'snap failed')
+    dev = AVCaptureDevice.defaultDeviceWithMediaType_(AVMediaTypeVideo)
+    if dev is None: raise RuntimeError('no camera')
+    sess = AVCaptureSession.alloc().init()
+    inp, err = AVCaptureDeviceInput.deviceInputWithDevice_error_(dev, None)
+    if err is not None: raise RuntimeError(str(err))
+    sess.addInput_(inp)
+    outp = AVCapturePhotoOutput.alloc().init()
+    sess.addOutput_(outp)
+    sess.startRunning()
+    time.sleep(1.0)  # the first frames are dark while exposure settles
+    d = _SnapDelegate.alloc().init()
+    d.done,d.data = False,None
+    outp.capturePhotoWithSettings_delegate_(AVCapturePhotoSettings.photoSettings(), d)
+    # The delegate may be served by the main queue, so run the loop rather than block (see Imp's DEV.md)
+    end = time.time()+10
+    while not d.done and time.time() < end:
+        NSRunLoop.currentRunLoop().runMode_beforeDate_(NSDefaultRunLoopMode, NSDate.dateWithTimeIntervalSinceNow_(0.1))
+    sess.stopRunning()
+    if d.data is None: raise RuntimeError('no photo data')
+    path.write_bytes(bytes(d.data))
     return path
 
 

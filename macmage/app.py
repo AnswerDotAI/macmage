@@ -4,7 +4,7 @@ from AppKit import NSWorkspace, NSWorkspaceOpenConfiguration
 from Foundation import NSURL
 from fastcore.utils import Path
 
-__all__ = ['open_url', 'open_app']
+__all__ = ['open_url', 'open_app', 'frontmost', 'tell']
 
 
 def open_url(
@@ -27,3 +27,21 @@ def open_app(
         [NSURL.fileURLWithPath_(str(Path(o).expanduser())) for o in paths], url, cfg, None)
     else: ws.openApplicationAtURL_configuration_completionHandler_(url, cfg, None)
     return path
+
+
+def frontmost():
+    "The frontmost application: a dict of name, bundle_id, and pid. Needs no permission"
+    a = NSWorkspace.sharedWorkspace().frontmostApplication()
+    return dict(name=str(a.localizedName()), bundle_id=str(a.bundleIdentifier()), pid=int(a.processIdentifier()))
+
+
+def tell(
+    bundle_id:str, # The target app, e.g. from `frontmost`
+    script:str, # AppleScript to run inside its tell block
+    timeout:float=30 # Seconds before the run is killed
+):
+    "Run AppleScript against one app through Imp, whose `automation:<bundle_id>` grant it uses"
+    from .imp import Imp
+    r = Imp('osascript', '-e', f'tell application id "{bundle_id}"\n{script}\nend tell', timeout=timeout)
+    if r.returncode: raise RuntimeError(r.stderr.strip() or f'osascript failed ({r.returncode})')
+    return r.stdout.strip()

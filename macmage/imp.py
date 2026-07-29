@@ -29,11 +29,12 @@ def _argv(*args, **flags):
 def Imp(
     *args, # The command for Imp to run, after any flags
     input:str=None, # Text to feed to stdin, which `--show` displays
+    timeout:float=5, # Seconds before the run is killed; None for calls meant to block (wisps, --grant, commands)
     **flags # Imp flags, ahead of `args`: a value passes through, `True` makes a bare flag, a list or tuple becomes one argument each, and underscores become hyphens
 ):
     "Run Imp with `flags` and `args`, returning the `CompletedProcess` with text output captured"
     if not launcher.exists(): raise ImpError(f'Imp is not installed: {install_msg}')
-    return subprocess.run(_argv(*args, **flags), capture_output=True, text=True, input=input)
+    return subprocess.run(_argv(*args, **flags), capture_output=True, text=True, input=input, timeout=timeout)
 
 
 

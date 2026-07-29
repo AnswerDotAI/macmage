@@ -180,7 +180,16 @@ photos(5)                             # newest five: id, created, size, location
 transcribe(record(5))                 # say something for five seconds, get it back as text
 ```
 
-Each of these asks the real macOS store, so each needs its Imp grant: `contacts`, `calendars`, `reminders`, `photos`, `microphone` for `record`, `camera` for `snap`, and `speech` for `transcribe`. One `Imp --grant contacts,calendars,reminders,photos,microphone,camera,speech` covers the lot, and a missing grant raises `ImpError` naming the command. `contacts`/`contact` search by name the way the Contacts app does. `events` looks ahead, and `add_event`/`del_event` write to the default calendar; `reminders`/`add_reminder`/`del_reminder` do the same for the default list. `photos` returns metadata for the newest assets and `save_photo` exports one's original bytes. `snap` captures a camera still through `Imp --snap` (so it works even outside Imp). `record` writes an m4a from the default microphone, and `transcribe` turns any audio file into text with Apple's on-device recognizer, so the pair composes into dictation.
+Each of these asks the real macOS store, so each needs its Imp grant: `contacts`, `calendars`, `reminders`, `photos`, `microphone` for `record`, `camera` for `snap`, and `speech` for `transcribe`. One `Imp --grant contacts,calendars,reminders,photos,microphone,camera,speech` covers the lot, and a missing grant raises `ImpError` naming the command. `contacts`/`contact` search by name the way the Contacts app does. `events` looks ahead, and `add_event`/`del_event` write to the default calendar; `reminders`/`add_reminder`/`del_reminder` do the same for the default list. `photos` returns metadata for the newest assets and `save_photo` exports one's original bytes. `snap` captures a camera still in a fresh child process via `apart` (a spawned child holds the same grants, and capture cannot share a process with the hotkey engine's background loop). `record` writes an m4a from the default microphone, and `transcribe` turns any audio file into text with Apple's on-device recognizer, so the pair composes into dictation.
+
+
+```python
+from macmage import apart
+apart(snap_py, 'still.jpg')            # any module-level function, in a fresh process
+apart(slow_thing, timeout=60)          # bounded; raises TimeoutError past the limit
+```
+
+`apart(fn, *args, **kwargs)` runs a function in a freshly spawned process and returns its result, re-raising anything it raises. The child is a descendant of the agent, so it holds the same Imp grants, and it gets its own main loop, which is what camera capture and friends need; a slow call in a hotkey handler also stops blocking every other hotkey. `snap` is built on it.
 
 
 ## Permissions
