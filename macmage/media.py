@@ -5,21 +5,19 @@ from datetime import datetime
 
 from fastcore.utils import *
 from AVFoundation import AVAudioRecorder, AVFormatIDKey, AVNumberOfChannelsKey, AVSampleRateKey
-from Foundation import NSSortDescriptor, NSURL
+from Foundation import NSOperationQueue, NSSortDescriptor, NSURL
 from Photos import PHAsset, PHFetchOptions, PHImageManager, PHImageRequestOptions
 
-from .imp import need
+from .imp import Imp, need
 
-__all__ = ['photos', 'save_photo', 'record', 'transcribe']
+__all__ = ['photos', 'save_photo', 'snap', 'record', 'transcribe']
 
 
 def _phdict(a):
     d = dict(id=str(a.localIdentifier()),
         created=datetime.fromtimestamp(a.creationDate().timeIntervalSince1970()) if a.creationDate() else None,
         w=int(a.pixelWidth()), h=int(a.pixelHeight()), video=a.mediaType()==2, favorite=bool(a.isFavorite()))
-    if a.location() is not None:
-        c = a.location().coordinate()
-        d['lat'],d['lon'] = c.latitude,c.longitude
+    if a.location() is not None: d['lat'],d['lon'] = a.location().coordinate()
     return d
 
 
@@ -55,6 +53,17 @@ def save_photo(
     return path
 
 
+def snap(
+    path=None # Where to write the still; a temp file if None
+):
+    "Capture a photo from the default camera via `Imp --snap`, returning the path"
+    path = Path(path or tempfile.mktemp(suffix='.jpg'))
+    r = Imp(snap=path)
+    if r.returncode: raise RuntimeError(r.stdout.strip() or 'snap failed')
+    return path
+
+
+
 def record(
     secs:float=5, # How long to record
     path=None # Where to write the m4a; a temp file if None
@@ -79,6 +88,7 @@ def transcribe(
     need('speech')
     from Speech import SFSpeechRecognizer, SFSpeechURLRecognitionRequest
     rec = SFSpeechRecognizer.alloc().init()
+    rec.setQueue_(NSOperationQueue.alloc().init())  # handlers default to the main queue, which the caller is blocking
     req = SFSpeechURLRecognitionRequest.alloc().initWithURL_(NSURL.fileURLWithPath_(str(Path(path))))
     got, evt = {}, threading.Event()
     def cb(res, err):

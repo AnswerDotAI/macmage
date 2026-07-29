@@ -3,7 +3,7 @@ these need Imp's `microphone`, `speech`, and `photos` grants. `say` synthesizes 
 speech, giving the transcription check ground truth without anyone talking."""
 import subprocess
 
-from macmage import photos, record, save_photo, transcribe
+from macmage import photos, record, save_photo, snap, transcribe
 
 
 def test_transcribe_knows_what_say_said(tmp_path):
@@ -17,6 +17,13 @@ def test_record_writes_audio(tmp_path):
     "A short recording produces a non-trivial m4a"
     p = record(0.5, tmp_path/'clip.m4a')
     assert p.exists() and p.stat().st_size > 1000
+
+
+def test_snap_captures(tmp_path):
+    "The camera delivers a real still through Imp"
+    p = snap(tmp_path/'still.jpg')
+    assert p.stat().st_size > 10000
+
 
 
 def test_photos_metadata(tmp_path):
