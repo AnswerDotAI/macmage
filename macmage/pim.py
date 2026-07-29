@@ -9,6 +9,7 @@ from Contacts import (CNContact, CNContactEmailAddressesKey, CNContactFamilyName
 from EventKit import EKEvent, EKEventStore, EKReminder, EKSpanThisEvent
 from Foundation import NSCalendar, NSCalendarUnitDay, NSCalendarUnitHour, NSCalendarUnitMinute, NSCalendarUnitMonth, NSCalendarUnitYear, NSDate
 
+from fastcore.aio import athreaded
 from .imp import need
 
 __all__ = ['contacts', 'contact', 'events', 'add_event', 'del_event', 'reminders', 'add_reminder', 'del_reminder']
@@ -27,6 +28,7 @@ def _cndict(c):
         phones=[str(o.value().stringValue()) for o in c.phoneNumbers()])
 
 
+@athreaded
 def contacts(
     name:str # Name to match, as the Contacts search field would
 ):
@@ -38,11 +40,11 @@ def contacts(
     return L(res).map(_cndict)
 
 
-def contact(
+async def contact(
     name:str # Name to match; the first match wins
 ):
     "The first contact matching `name`, or None"
-    return first(contacts(name))
+    return first(await contacts(name))
 
 
 def _evdict(e):
@@ -50,6 +52,7 @@ def _evdict(e):
         end=_pydate(e.endDate()), cal=str(e.calendar().title()))
 
 
+@athreaded
 def events(
     days=7 # How far ahead to look
 ):
@@ -60,6 +63,7 @@ def events(
     return L(s.eventsMatchingPredicate_(pred)).map(_evdict)
 
 
+@athreaded
 def add_event(
     title:str, # Event title
     start:datetime, # When it starts
@@ -80,6 +84,7 @@ def add_event(
     return str(ev.eventIdentifier())
 
 
+@athreaded
 def del_event(
     id:str # An id from `events` or `add_event`
 ):
@@ -98,6 +103,7 @@ def _rmdict(r):
         due=_pydate(NSCalendar.currentCalendar().dateFromComponents_(due)) if due is not None else None)
 
 
+@athreaded
 def reminders(
     done:bool=False # Completed ones instead of open ones?
 ):
@@ -113,6 +119,7 @@ def reminders(
     return L(got).filter(lambda r: bool(r.isCompleted())==done).map(_rmdict)
 
 
+@athreaded
 def add_reminder(
     title:str, # Reminder title
     due:datetime=None, # Optional due date
@@ -133,6 +140,7 @@ def add_reminder(
     return str(r.calendarItemIdentifier())
 
 
+@athreaded
 def del_reminder(
     id:str # An id from `reminders` or `add_reminder`
 ):

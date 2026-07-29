@@ -1,7 +1,7 @@
 from fastcore.utils import *
 from fastcore.xdg import *
 from fastcore.script import call_parse
-import importlib, inspect, json, plistlib, re, select, threading, time, traceback
+import asyncio, importlib, inspect, json, plistlib, re, select, threading, time, traceback
 from .util import *
 from .app import *
 from .clip import *
@@ -10,7 +10,7 @@ from .keys import _layout_cache, _quit_loop
 from .ui import *
 from .pim import *
 from .media import *
-from .imp import ImpError, agent, agent_state, Imp, imp_check, install_msg, launcher, unagent, as_imp, need
+from .imp import ImpError, agent, agent_state, Imp, aimp, imp_check, install_msg, launcher, unagent, as_imp, need
 
 __version__ = "0.1.0"
 
@@ -30,15 +30,23 @@ def mage(
     f=None, # Handler to wrap; None when used as `@mage(keys=...)`
     *,
     keys:str|list=None, # Combo(s), e.g. 'alt-`' or 'ctrl-alt-cmd-t', to bind the handler to
-    hold:bool=False # Take `f` as a generator: the body before `yield` runs on press and the rest on release
+    hold:bool=False # Take `f` as an async generator: the body before `yield` runs on press and the rest on release
 ):
     "Wrap a handler so exceptions are logged instead of propagating; with `keys`, also register it as a global hotkey"
     if f is None: return partial(mage, keys=keys, hold=hold)
+    # a wrapper is a generator (or async) function only by its own body's syntax, so the cases cannot share one body
     if hold:
-        if not inspect.isgeneratorfunction(f): raise ValueError(f'A `hold` handler needs a `yield`: {f.__name__} is not a generator function')
-        @functools.wraps(f)  # a wrapper is a generator function if it yields *anywhere*, so the two cases cannot share one body
-        def _f(*args, **kwargs):
-            try: yield from f(*args, **kwargs)
+        if not inspect.isasyncgenfunction(f):
+            raise ValueError(f'A `hold` handler needs `async def` with a `yield`: {f.__name__} is not an async generator function')
+        @functools.wraps(f)
+        async def _f(*args, **kwargs):
+            try:
+                async for x in f(*args, **kwargs): yield x
+            except Exception as e: _log_exc(e, f.__name__)
+    elif inspect.iscoroutinefunction(f):
+        @functools.wraps(f)
+        async def _f(*args, **kwargs):
+            try: return await f(*args, **kwargs)
             except Exception as e: _log_exc(e, f.__name__)
     else:
         @functools.wraps(f)
@@ -49,26 +57,30 @@ def mage(
     return _f
 
 
-def _reload_on_change(path):
-    fds = [os.open(p, os.O_EVTONLY) for p in (path, *path.glob('*.py'))]
+def _watch_config(loop):
+    "Reload on any config change: kqueue vnode events surface through the loop's own selector"
+    kq = select.kqueue()
+    fds = [os.open(p, os.O_EVTONLY) for p in (config_dir, *config_dir.glob('*.py'))]
     flags = select.KQ_NOTE_WRITE | select.KQ_NOTE_ATTRIB | select.KQ_NOTE_RENAME | select.KQ_NOTE_DELETE
     events = [select.kevent(o, filter=select.KQ_FILTER_VNODE, flags=select.KQ_EV_ADD | select.KQ_EV_ONESHOT, fflags=flags) for o in fds]
-    select.kqueue().control(events, 1)
-    _quit_loop()  # `run` reloads on the main thread once its loop exits
+    kq.control(events, 0)
+    loop.add_reader(kq.fileno(), _quit_loop)  # `run` reloads on the main thread once its loop exits
 
 
 def _load_config():
+    loop = asyncio.get_running_loop()
+    _watch_config(loop)
     sys.path.insert(0, str(config_dir))
     try: importlib.import_module('config')
     except Exception as e:
         _log_exc(e, 'config')
-        # The panel is the answer to "did my save load?", shown from a thread so the loop below
-        # still runs and the watcher's reload still works. The log already has the traceback, so
-        # a display failure (e.g. Imp missing) must not take down the process that waits for the fix.
-        def _show():
-            try: show(f'macmage: config.py failed to load at {time.strftime("%T")}', ''.join(traceback.format_exception(e)))
+        # The panel is the answer to "did my save load?", as a task so the loop still runs and the
+        # watcher's reload still works. The log already has the traceback, so a display failure
+        # (e.g. Imp missing) must not take down the process that waits for the fix.
+        async def _show():
+            try: await show(f'macmage: config.py failed to load at {time.strftime("%T")}', ''.join(traceback.format_exception(e)))
             except Exception: pass
-        threading.Thread(target=_show, daemon=True).start()
+        loop.create_task(_show())
 
 
 def run():
@@ -76,7 +88,6 @@ def run():
     threading.excepthook = lambda a: _log_exc(a.exc_value, f'thread {a.thread.name}')
     sys.excepthook = lambda t,v,tb: _log_exc(v, 'main thread')
     config_dir.mkdir(parents=True, exist_ok=True)
-    threading.Thread(target=_reload_on_change, args=(config_dir,), daemon=True).start()
     run_loop(_load_config)  # config registrations deliver via the main-thread loop (see DEV.md)
     stop_keys()  # execv skips atexit, and a Carbon loop dying mid-run shadows layout queries system-wide (see DEV.md)
     os.execv(run_args[0], run_args)

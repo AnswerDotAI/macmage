@@ -1,10 +1,11 @@
 "Running under Imp.app, the signed bundle macOS attaches permission grants to"
 
 from fastcore.utils import *
-import ctypes, plistlib, subprocess
+from fastcore.aio import athreaded
+import asyncio, ctypes, plistlib, subprocess
 from .util import wait_until
 
-__all__ = ['ImpError', 'app_path', 'launcher', 'install_msg', 'Imp', 'as_imp', 'need', 'imp_check', 'agent_state', 'agent', 'unagent']
+__all__ = ['ImpError', 'app_path', 'launcher', 'install_msg', 'Imp', 'aimp', 'as_imp', 'need', 'aneed', 'imp_check', 'agent_state', 'agent', 'unagent']
 
 app_path = Path.home()/'Applications/Imp.app'
 launcher = app_path/'Contents/MacOS/Imp'
@@ -35,6 +36,25 @@ def Imp(
     "Run Imp with `flags` and `args`, returning the `CompletedProcess` with text output captured"
     if not launcher.exists(): raise ImpError(f'Imp is not installed: {install_msg}')
     return subprocess.run(_argv(*args, **flags), capture_output=True, text=True, input=input, timeout=timeout)
+
+
+async def aimp(
+    *args, # The command for Imp to run, after any flags
+    input:str=None, # Text to feed to stdin, which `--show` displays
+    timeout:float=None, # Seconds before the child is killed; None blocks, which is what wisps and grants want
+    **flags # Imp flags, ahead of `args`, spelled as in `Imp`
+):
+    "Run Imp without blocking the loop, returning a `CompletedProcess` like `Imp`: for wisps, grants, and anything that waits on a person"
+    if not launcher.exists(): raise ImpError(f'Imp is not installed: {install_msg}')
+    argv = _argv(*args, **flags)
+    p = await asyncio.create_subprocess_exec(*argv, stdin=asyncio.subprocess.PIPE if input is not None else None,
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    try: out, err = await asyncio.wait_for(p.communicate(input.encode() if input is not None else None), timeout)
+    except TimeoutError:
+        p.kill()
+        raise
+    return subprocess.CompletedProcess(argv, p.returncode, out.decode(), err.decode())
+
 
 
 
@@ -68,6 +88,9 @@ def need(
         f'Run: Imp --grant {",".join(missing)}\n'
         'Then restart this process (for the agent: touch its config.py)')
     _ok.update(todo)
+
+
+aneed = athreaded(need)
 
 
 def _domain(): return f'gui/{os.getuid()}'

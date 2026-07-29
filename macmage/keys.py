@@ -2,9 +2,8 @@
 
 from fastcore.utils import *
 from fastcore.xdg import xdg_cache_home
-import atexit, inspect, json, objc, queue, re, struct, subprocess, sys, threading, time, traceback
-from Quartz import (CFMachPortCreateRunLoopSource, CFRunLoopAddSource, CFRunLoopGetCurrent, CFRunLoopGetMain,
-    CFRunLoopPerformBlock, CFRunLoopWakeUp, CFRunLoopRun, CFRunLoopStop,
+import asyncio, atexit, cfloop, inspect, json, objc, re, struct, subprocess, sys, threading, time, traceback
+from Quartz import (CFMachPortCreateRunLoopSource, CFRunLoopAddSource, CFRunLoopGetCurrent, CFRunLoopRun, CFRunLoopStop,
     CGEnableEventStateCombining, CGEventCreateKeyboardEvent, CGEventGetFlags, CGEventGetIntegerValueField, CGEventKeyboardSetUnicodeString,
     CGEventMaskBit, CGEventPost, CGEventSetFlags, CGEventSourceFlagsState, CGEventTapCreate, CGEventTapEnable, kCFRunLoopCommonModes,
     kCGEventFlagMaskAlternate, kCGEventFlagMaskCommand, kCGEventFlagMaskControl, kCGEventFlagMaskShift,
@@ -12,9 +11,9 @@ from Quartz import (CFMachPortCreateRunLoopSource, CFRunLoopAddSource, CFRunLoop
     kCGEventSourceStateHIDSystemState, kCGEventTapOptionListenOnly, kCGHIDEventTap, kCGHeadInsertEventTap, kCGKeyboardEventKeycode, kCGSessionEventTap)
 
 from ._hitoolbox import (EventTypeSpec, GetEventDispatcherTarget, GetEventKind, GetEventParameter, InstallEventHandler,
-    QuitApplicationEventLoop, RegisterEventHotKey, RunApplicationEventLoop, UnregisterEventHotKey, kEventClassKeyboard,
+    RegisterEventHotKey, UnregisterEventHotKey, kEventClassKeyboard,
     kEventHotKeyPressed, kEventHotKeyReleased, kEventParamDirectObject, typeEventHotKeyID)
-from .imp import need
+from .imp import need, aneed
 from .util import wait_until
 
 __all__ = ['mods', 'specials', 'char2vk', 'parse_combo', 'hotkey', 'unhotkey', 'leader', 'unleader', 'watch', 'unwatch', 'modkeys', 'holdmod', 'unholdmod', 'press', 'stop_keys', 'run_loop', 'type_text']
@@ -90,39 +89,37 @@ def parse_combo(
     return vk, mask
 
 
-_handlers, _refs, _work, _lock = {}, {}, queue.Queue(), threading.Lock()
-_next_id, _started, _own_loop, _worker_started, _tap_started, _handler_ref, _cb = 0, False, False, False, False, None, None
+_handlers, _refs, _lock = {}, {}, threading.Lock()
+_next_id, _started, _tap_started, _handler_ref, _cb = 0, False, False, None, None
+_loop, _stop = None, None
 
 
 def _handle(callref, event, void):
-    "Carbon handler: look up this combination's press or release function and hand it to the worker thread"
+    "Carbon handler: look up this combination's press or release function and dispatch it"
     try:
         res, atype, asize, param = GetEventParameter(event, kEventParamDirectObject, typeEventHotKeyID, None, 8, None, None)
         _sig, hkid = struct.unpack('@II', param)
         down, up = _handlers.get(hkid, (None, None))
-        if (fn := down if GetEventKind(event)==kEventHotKeyPressed else up): _work.put(fn)
+        if (fn := down if GetEventKind(event)==kEventHotKeyPressed else up): _dispatch(fn)
     except Exception: traceback.print_exc()
     return 0
 
 
-def _worker():
-    while True:
-        fn = _work.get()
-        try: fn()
+async def _alogged(fn, *args):
+    try: await fn(*args)
+    except Exception: traceback.print_exc()
+
+
+def _dispatch(fn, *args):
+    "Run a handler on the agent's loop: async ones as tasks, sync ones inline (so they should stay quick)"
+    if inspect.iscoroutinefunction(fn): (_loop or asyncio.get_running_loop()).create_task(_alogged(fn, *args))
+    else:
+        try: fn(*args)
         except Exception: traceback.print_exc()
 
 
-def _ensure_worker():
-    "Start the handler-dispatch thread and register exit teardown, once per process"
-    global _worker_started
-    if _worker_started: return
-    threading.Thread(target=_worker, daemon=True).start()
-    atexit.register(stop_keys)
-    _worker_started = True
-
-
 def stop_keys():
-    "Shut down the keyboard engine, releasing every hotkey and stopping the tap and event loop. Runs at exit; call it yourself before `os.exec*`, which skips atexit (see DEV.md)"
+    "Shut down the keyboard engine, releasing every hotkey and ending the loop and tap. Runs at exit; call it yourself before `os.exec*`, which skips atexit (see DEV.md)"
     for combo in list(_refs): unhotkey(combo)
     _quit_loop()
     if _tap: CGEventTapEnable(_tap, False)
@@ -131,64 +128,65 @@ def stop_keys():
 
 
 def _quit_loop():
-    "Quit the Carbon event loop from any thread. Cross-thread, `QuitApplicationEventLoop` is a no-op: its quit event only takes effect posted from the loop's own thread, so schedule it there (see DEV.md)"
-    if not _own_loop or threading.current_thread() is threading.main_thread(): QuitApplicationEventLoop()
-    else:
-        CFRunLoopPerformBlock(CFRunLoopGetMain(), kCFRunLoopCommonModes, lambda: QuitApplicationEventLoop())
-        CFRunLoopWakeUp(CFRunLoopGetMain())
+    "Signal the agent loop to end, from any thread"
+    if _loop is not None: _loop.call_soon_threadsafe(_stop.set)
 
 
 def _start():
-    "Install the Carbon handler and start the worker thread, plus the background event-loop thread unless `run_loop` owns the loop; once per process"
+    "Install the Carbon handler, once per process; hotkeys dispatch on the agent loop, so one must be running"
     global _started, _handler_ref, _cb
     if _started: return
+    if _loop is None: raise RuntimeError('hotkeys need the agent loop running: wrap your program in run_loop(...) (see README)')
     @objc.callbackFor(InstallEventHandler)
     def _cb(callref, event, void): return _handle(callref, event, void)
     specs = [EventTypeSpec(eventClass=kEventClassKeyboard, eventKind=o) for o in (kEventHotKeyPressed, kEventHotKeyReleased)]
     res, _handler_ref = InstallEventHandler(GetEventDispatcherTarget(), _cb, 2, specs, None, None)
     if res: raise RuntimeError(f'InstallEventHandler failed: {res}')
-    _ensure_worker()
-    if not _own_loop:
-        threading.Thread(target=RunApplicationEventLoop, daemon=True).start()
-        time.sleep(0.25)  # the loop initialises Text Services at entry; posting during that window aborts the process (see DEV.md)
+    atexit.register(stop_keys)
     _started = True
 
 
 def run_loop(
-    setup:callable=None # Runs first, with the background loop disabled, so its registrations deliver via the loop below
+    setup:callable=None # Runs once the loop is up, so its registrations dispatch there
 ):
-    "Run the Carbon event loop on the calling thread until `stop_keys` quits it: the agent's arrangement, under which main-queue delegates (e.g. `snap_py`'s) fire without pumping, unlike the background-loop arrangement `hotkey` starts on its own (see DEV.md)"
-    global _own_loop
-    _own_loop = True
-    if setup: setup()
-    _start()
-    RunApplicationEventLoop()
+    "Run the agent arrangement until `stop_keys`: a stock asyncio loop on cfloop's Carbon-pumping selector owns the calling thread, so hotkeys dispatch there, async handlers run as tasks, and main-queue delegates drain during every idle wait (see DEV.md)"
+    cfloop.run(_agent(setup))
+
+
+async def _agent(setup):
+    global _loop, _stop
+    _loop, _stop = asyncio.get_running_loop(), asyncio.Event()
+    try:
+        if setup: setup()
+        await _stop.wait()
+    finally: _loop = None
 
 
 def _hold_pair(fn):
-    "Split generator `fn` into press and release handlers: it runs on its own thread, pausing at `yield` until the key comes up"
+    "Split async generator `fn` into press and release handlers: it runs as a task, pausing at `yield` until the key comes up"
     waiting = []
     def _press():
-        ev = threading.Event()
+        ev = asyncio.Event()
         waiting.append(ev)
-        def _run():
+        async def _run():
             try:
-                gen = fn()
-                next(gen)
-                ev.wait()
-                next(gen, None)
+                agen = fn()
+                await anext(agen)
+                await ev.wait()
+                await anext(agen, None)
             except Exception: traceback.print_exc()
-        threading.Thread(target=_run, daemon=True).start()
+        _loop.create_task(_run())
     def _release():
         if waiting: waiting.pop(0).set()
     return _press, _release
 
 
 def _pair(fn, up, hold):
-    "The (press, release) pair for a handler, splitting a `hold` generator into one"
+    "The (press, release) pair for a handler, splitting a `hold` async generator into one"
     if not hold: return fn, up
     if up: raise ValueError('A `hold` handler resumes on release, so it cannot also take `up`')
-    if not inspect.isgeneratorfunction(fn): raise ValueError(f'A `hold` handler needs a `yield`: {fn.__name__} is not a generator function')
+    if not inspect.isasyncgenfunction(fn):
+        raise ValueError(f'A `hold` handler needs `async def` with a `yield`: {fn.__name__} is not an async generator function')
     return _hold_pair(fn)
 
 
@@ -242,7 +240,7 @@ def leader(
             if _modes.pop(combo, None) is None: return  # a key and the timer can both ask
             timer.cancel()
             for k in bound: unhotkey(k)
-        timer = threading.Timer(timeout, _exit)
+        timer = _loop.call_later(timeout, _exit)  # `_enter` dispatches on the loop, so this is loop-thread code
         _modes[combo] = _exit
         try:
             for k, fn in list(keymap.items()) + [('escape', lambda: None)]:
@@ -251,7 +249,6 @@ def leader(
         except Exception:
             _exit()
             raise
-        timer.start()
     return hotkey(combo, _enter)
 
 
@@ -270,7 +267,8 @@ def _tap_cb(proxy, etype, event, refcon):
     if etype in (kCGEventTapDisabledByTimeout, kCGEventTapDisabledByUserInput): CGEventTapEnable(_tap, True)
     elif (kind := _kinds.get(etype)):
         vk, flags = CGEventGetIntegerValueField(event, kCGKeyboardEventKeycode), CGEventGetFlags(event)
-        for f in _watchers: _work.put(partial(f, kind, vk, flags))
+        # threadsafe scheduling keeps this callback fast: a slow tap callback gets the tap disabled
+        for f in _watchers: _loop.call_soon_threadsafe(_dispatch, f, kind, vk, flags)
     return event
 
 
@@ -287,13 +285,13 @@ def _tap_loop(ready):
 def _start_tap():
     global _tap_started, _tap_thread
     if _tap_started: return
+    if _loop is None: raise RuntimeError('watchers need the agent loop running: wrap your program in run_loop(...) (see README)')
     need('accessibility')
     ready = threading.Event()
     _tap_thread = threading.Thread(target=_tap_loop, args=(ready,), daemon=True)
     _tap_thread.start()
     ready.wait(5)
     if _tap is None: raise RuntimeError('Could not create event tap: is Accessibility granted?')
-    _ensure_worker()
     _tap_started = True
 
 
@@ -364,16 +362,17 @@ def press(
     finally: _post(False)
 
 
-def type_text(
+async def type_text(
     s:str # Text to type
 ):
     "Type `s` into the focused application, one synthetic keystroke per chunk; needs Accessibility"
-    need('accessibility')
-    wait_until(_mods_clear, 1)  # applications read live modifier state when interpreting a unicode event, so text typed while the triggering hotkey is still held arrives mangled or not at all
+    await aneed('accessibility')
+    end = time.monotonic()+1  # applications read live modifier state when interpreting a unicode event, so text typed while the triggering hotkey is still held arrives mangled or not at all
+    while not _mods_clear() and time.monotonic() < end: await asyncio.sleep(0.01)
     for i in range(0, len(s), 16):
         chunk = s[i:i+16]
         for down in (True, False):
             ev = CGEventCreateKeyboardEvent(None, 0, down)
             CGEventKeyboardSetUnicodeString(ev, len(chunk), chunk)
             CGEventPost(kCGHIDEventTap, ev)
-            time.sleep(0.001)
+            await asyncio.sleep(0.001)

@@ -1,6 +1,6 @@
 "What `open_app` does before it opens anything, since launching an application is not a test."
 
-import pytest
+import cfloop, pytest
 
 from macmage import frontmost, imp_check, open_app, tell
 
@@ -19,4 +19,4 @@ def test_frontmost_shape():
 @pytest.mark.skipif(not imp_check('automation:com.apple.finder'), reason='Imp has no Finder automation grant')
 def test_tell_finder():
     "AppleScript reaches Finder through Imp's per-target automation grant"
-    assert tell('com.apple.finder', 'return name of home')
+    assert cfloop.run(tell('com.apple.finder', 'return name of home'))

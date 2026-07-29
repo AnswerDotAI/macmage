@@ -1,8 +1,11 @@
 "The clipboard, as plain text"
 
-import threading, time
+import asyncio
+
 
 from AppKit import NSPasteboard, NSPasteboardTypeString
+
+from .keys import _dispatch
 
 __all__ = ['get_clip', 'set_clip', 'map_clip', 'watch_clip', 'unwatch_clip']
 
@@ -34,34 +37,34 @@ def map_clip(
 _clip_watchers = []
 
 
-def _clip_poll(
-    last:int # The pasteboard's changeCount when watching began, read before this thread starts so no change can hide in the gap
+async def _clip_poll(
+    last:int # The pasteboard's changeCount when watching began, read before this task starts so no change can hide in the gap
 ):
     # There is no clipboard-change notification on macOS; polling `changeCount` is the
     # sanctioned mechanism, and the check is microseconds.
     pb = NSPasteboard.generalPasteboard()
     while _clip_watchers:
-        time.sleep(0.5)
+        await asyncio.sleep(0.5)
         c = pb.changeCount()
         if c == last: continue
         last = c
         if _SKIP & set(pb.types() or ()): continue
         if (s := get_clip()) is None: continue
-        for f in list(_clip_watchers): f(s)
+        for f in list(_clip_watchers): _dispatch(f, s)
 
 
 def watch_clip(
-    fn:callable # Called with the clipboard's new text after every change
+    fn:callable # Called with the clipboard's new text after every change; may be `async def`
 ):
-    "Report clipboard changes to `fn`, skipping copies marked concealed or transient (passwords). Usable as a decorator; needs no permission"
+    "Report clipboard changes to `fn`, skipping copies marked concealed or transient (passwords). Usable as a decorator; needs no permission, but must be called with a loop running (the agent's, or any `cfloop.run`)"
+    loop = asyncio.get_running_loop()
     _clip_watchers.append(fn)
-    if len(_clip_watchers) == 1:
-        threading.Thread(target=_clip_poll, args=(NSPasteboard.generalPasteboard().changeCount(),), daemon=True).start()
+    if len(_clip_watchers) == 1: loop.create_task(_clip_poll(NSPasteboard.generalPasteboard().changeCount()))
     return fn
 
 
 def unwatch_clip(
     fn:callable # A function previously passed to `watch_clip`
 ):
-    "Stop reporting clipboard changes to `fn`; the poll thread ends when nobody is watching"
+    "Stop reporting clipboard changes to `fn`; the poll task ends when nobody is watching"
     _clip_watchers.remove(fn)

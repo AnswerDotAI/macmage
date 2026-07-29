@@ -1,18 +1,19 @@
 "Photos, audio recording, and speech transcription, each needing its Imp permission"
 
-import tempfile, threading, time
+import asyncio, tempfile
+from types import SimpleNamespace
 from datetime import datetime
 
 from fastcore.utils import *
 from AVFoundation import (AVAudioRecorder, AVCaptureDevice, AVCaptureDeviceInput, AVCapturePhotoOutput,
     AVCapturePhotoSettings, AVCaptureSession, AVFormatIDKey, AVMediaTypeVideo, AVNumberOfChannelsKey, AVSampleRateKey)
-from Foundation import NSDate, NSDefaultRunLoopMode, NSObject, NSOperationQueue, NSRunLoop, NSSortDescriptor, NSURL
+from Foundation import NSObject, NSOperationQueue, NSSortDescriptor, NSURL
 from Photos import PHAsset, PHFetchOptions, PHImageManager, PHImageRequestOptions
 
-from .imp import need
-from .util import apart
+from fastcore.aio import athreaded
+from .imp import need, aneed
 
-__all__ = ['photos', 'save_photo', 'snap', 'snap_py', 'record', 'transcribe']
+__all__ = ['photos', 'save_photo', 'snap', 'record', 'transcribe']
 
 
 def _phdict(a):
@@ -23,6 +24,7 @@ def _phdict(a):
     return d
 
 
+@athreaded
 def photos(
     n:int=10 # How many, newest first
 ):
@@ -35,6 +37,7 @@ def photos(
     return L(res.objectAtIndex_(i) for i in range(res.count())).map(_phdict)
 
 
+@athreaded
 def save_photo(
     id:str, # An id from `photos`
     path # Where to write the original image data
@@ -55,30 +58,25 @@ def save_photo(
     return path
 
 
-def snap(
-    path=None # Where to write the still; a temp file if None
-):
-    "Capture a photo from the default camera in a fresh process (`apart`), returning the path"
-    return apart(snap_py, path, timeout=15)  # capture takes a couple of seconds, so the default is roomier still
-
-
-# The pyobjc capture that `snap` runs in a fresh process via `apart`: in-process it cannot
-# coexist with the hotkey engine's *background* Carbon loop, which breaks main-run-loop pumping
-# (see DEV.md), though under `keys.run_loop` (the agent's arrangement) it works with no pumping.
-# `Imp --snap` remains as the sample bytes-over-stdout Swift verb until another replaces it.
+# `Imp --snap` remains as the sample bytes-over-stdout Swift verb; python captures in-process.
 class _SnapDelegate(NSObject):
     def captureOutput_didFinishProcessingPhoto_error_(self, o, photo, error):
         self.data = photo.fileDataRepresentation()
-        self.done = True
+        self.signal()
 
 
-def snap_py(
+async def _signalled(obj, coro_wait):
+    "Arm `obj.signal` to set an event from any thread or queue, then await `coro_wait(event)`"
+    loop, evt = asyncio.get_running_loop(), asyncio.Event()
+    obj.signal = lambda: loop.call_soon_threadsafe(evt.set)
+    return await coro_wait(evt)
+
+
+async def snap(
     path=None # Where to write the still; a temp file if None
 ):
-    "Capture a photo from the default camera with pyobjc directly, returning the path"
-    need('camera')
-    from . import keys
-    if keys._started and not keys._own_loop: raise RuntimeError('the hotkey engine is running its background Carbon loop, which breaks main-run-loop pumping, so the photo delegate can never arrive (see DEV.md); use snap(), or run under keys.run_loop')
+    "Capture a photo from the default camera, returning the path"
+    await aneed('camera')
     path = Path(path or tempfile.mktemp(suffix='.jpg'))
     dev = AVCaptureDevice.defaultDeviceWithMediaType_(AVMediaTypeVideo)
     if dev is None: raise RuntimeError('no camera')
@@ -89,56 +87,57 @@ def snap_py(
     outp = AVCapturePhotoOutput.alloc().init()
     sess.addOutput_(outp)
     sess.startRunning()
-    time.sleep(1.0)  # the first frames are dark while exposure settles
-    d = _SnapDelegate.alloc().init()
-    d.done,d.data = False,None
-    outp.capturePhotoWithSettings_delegate_(AVCapturePhotoSettings.photoSettings(), d)
-    # The delegate may be served by the main queue, so run the loop rather than block (see Imp's DEV.md)
-    end = time.time()+10
-    while not d.done and time.time() < end:
-        NSRunLoop.currentRunLoop().runMode_beforeDate_(NSDefaultRunLoopMode, NSDate.dateWithTimeIntervalSinceNow_(0.1))
-    sess.stopRunning()
+    try:
+        await asyncio.sleep(1.0)  # the first frames are dark while exposure settles
+        d = _SnapDelegate.alloc().init()
+        d.data = None
+        async def _wait(evt):
+            outp.capturePhotoWithSettings_delegate_(AVCapturePhotoSettings.photoSettings(), d)
+            await asyncio.wait_for(evt.wait(), 10)
+        await _signalled(d, _wait)
+    finally: sess.stopRunning()
     if d.data is None: raise RuntimeError('no photo data')
     path.write_bytes(bytes(d.data))
     return path
 
 
-
-def record(
+async def record(
     secs:float=5, # How long to record
     path=None # Where to write the m4a; a temp file if None
 ):
     "Record from the default microphone, returning the path"
-    need('microphone')
+    await aneed('microphone')
     path = Path(path or tempfile.mktemp(suffix='.m4a'))
     settings = {AVFormatIDKey: int.from_bytes(b'aac ', 'big'), AVSampleRateKey: 44100.0, AVNumberOfChannelsKey: 1}
     rec, err = AVAudioRecorder.alloc().initWithURL_settings_error_(NSURL.fileURLWithPath_(str(path)), settings, None)
     if err is not None: raise RuntimeError(str(err))
     rec.record()
-    time.sleep(secs)
-    rec.stop()
+    try: await asyncio.sleep(secs)
+    finally: rec.stop()
     return path
 
 
-def transcribe(
+async def transcribe(
     path, # An audio file (anything AVFoundation reads)
     timeout:float=60 # How long to wait for the final result
 ):
     "Speech in `path` as text, via Apple's recognizer"
-    need('speech')
+    await aneed('speech')
     from Speech import SFSpeechRecognizer, SFSpeechURLRecognitionRequest
     rec = SFSpeechRecognizer.alloc().init()
-    rec.setQueue_(NSOperationQueue.alloc().init())  # handlers default to the main queue, which the caller is blocking
+    rec.setQueue_(NSOperationQueue.alloc().init())  # keep handlers off the main queue
     req = SFSpeechURLRecognitionRequest.alloc().initWithURL_(NSURL.fileURLWithPath_(str(Path(path))))
-    got, evt = {}, threading.Event()
+    got, sig = {}, SimpleNamespace()
     def cb(res, err):
         if res is not None and res.isFinal():
             got['text'] = str(res.bestTranscription().formattedString())
-            evt.set()
+            sig.signal()
         elif err is not None:
             got.setdefault('err', err)
-            evt.set()
-    rec.recognitionTaskWithRequest_resultHandler_(req, cb)
-    if not evt.wait(timeout): raise TimeoutError('recognizer did not finish')
+            sig.signal()
+    async def _wait(evt):
+        rec.recognitionTaskWithRequest_resultHandler_(req, cb)
+        await asyncio.wait_for(evt.wait(), timeout)
+    await _signalled(sig, _wait)
     if 'text' not in got: raise RuntimeError(str(got['err']))
     return got['text']

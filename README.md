@@ -26,16 +26,16 @@ macmage --install
 
 ## Configure
 
-Create `$XDG_CONFIG_HOME/macmage/config.py`, normally `~/.config/macmage/config.py`. This example binds Alt-` to type a backtick, a zero-width space, and two more backticks:
+Create `$XDG_CONFIG_HOME/macmage/config.py`, normally `~/.config/macmage/config.py`. `examples/config.py` in the repo is a complete working configuration - menus, demos, clipboard transforms, dictation - ready to copy or crib from, and `import config_local` at its foot is the hook for additions that stay out of any repo. This example binds Alt-` to type a backtick, a zero-width space, and two more backticks:
 
 ```python
 from macmage import mage, type_text
 
 @mage(keys='alt-`')
-def backticks(): type_text('`​``')
+async def backticks(): await type_text('`​``')
 ```
 
-`backticks` here is a cantrip: a small function bound to a trigger, which is all any macmage configuration is. The triggers are hotkeys (`keys=`), held modifiers (`holdmod`), leader keys (`leader`), and clipboard changes (`watch_clip`); the actions are whatever Python you like, with typing, clipboard, application, and panel helpers below. `@mage` wraps a cantrip so an exception is logged instead of stopping the process. `hold=True` takes a generator instead, for cantrips that run while the key is held. The `cantrips/` directory in the repo holds ready-made ones, written to be copied next to `config.py` and imported from it.
+`backticks` here is a cantrip: a small function bound to a trigger, which is all any macmage configuration is. The triggers are hotkeys (`keys=`), held modifiers (`holdmod`), leader keys (`leader`), and clipboard changes (`watch_clip`); the actions are whatever Python you like, with typing, clipboard, application, and panel helpers below. `@mage` wraps a cantrip so an exception is logged instead of stopping the process. A cantrip may be `async def`: the agent runs on an asyncio loop (via [cfloop](https://github.com/AnswerDotAI/cfloop)), so async cantrips run concurrently as tasks, while plain ones run inline and should stay quick, since a slow one delays every other trigger. `hold=True` takes a generator instead - sync or async - for cantrips that run while the key is held. The `cantrips/` directory in the repo holds ready-made ones, written to be copied next to `config.py` and imported from it.
 
 `config.py` need not block. `macmage` keeps the process alive, and re-executes it whenever any `.py` file in the configuration directory changes, so a bare `touch` reloads it. An error while loading it is logged to `stderr.log` and shown in a panel with the traceback, and the process waits for the next change rather than exiting, so the answer to "did my save load?" is that a panel means no. The configuration can import sibling files from its directory as ordinary Python modules.
 
@@ -54,19 +54,19 @@ Hotkeys go through Carbon's `RegisterEventHotKey`, so they need no macOS permiss
 
 Combos name keys as typed on the current keyboard layout (`'cmd-alt-`'`, `'ctrl-shift-space'`). They can also name special keys such as `'esc'`, `'f5'` and `'left'` (see `specials`), or a raw key code as `'alt-<50>'`. Registering a combo again replaces its handler, and `unhotkey(combo)` releases it.
 
-The event loop runs on a background thread started at first registration, so hotkeys work in a notebook or script as well as in a daemon. Handlers run on a worker thread, so a slow handler delays later hotkeys but never the system's keyboard. Everything is released at process exit. A process that replaces itself with `os.exec*` skips that, so call `stop_keys()` first.
+Hotkeys dispatch on the agent's asyncio loop, so registration needs that loop running: the agent provides it, and a standalone script wraps its main in `run_loop(setup)`, registering inside `setup`. Async cantrips run as concurrent tasks; plain ones run inline on the loop, so a slow one delays other triggers (asyncio debug mode names offenders), and `hold` cantrips are async generators, running as tasks. Everything is released at process exit. A process that replaces itself with `os.exec*` skips that, so call `stop_keys()` first.
 
-To do something for as long as a key is held, pass `hold=True` and write the handler as a generator. The body before its `yield` runs on the press, and the rest on the release.
+To do something for as long as a key is held, pass `hold=True` and write the handler as an async generator. The body before its `yield` runs on the press, and the rest on the release.
 
 ```python
 @hotkey('ctrl-alt-cmd-r', hold=True)
-def record():
+async def record_while_held():
     rec = start_recording()
     yield
-    rec.stop()
+    await type_text(await transcribe(rec.stop()))
 ```
 
-The generator runs on its own thread and waits at the `yield`, so a body that blocks for the length of the hold cannot stall other hotkeys, and whatever it holds between the two halves stays an ordinary local variable. Carbon repeats nothing, so a long hold is exactly one press and one release. To handle the two edges separately instead, pass `up=`, as in `hotkey(combo, on_press, up=on_release)`.
+The generator runs as a task and waits at the `yield`, so a body awaiting for the length of the hold cannot stall other cantrips, and whatever it holds between the two halves stays an ordinary local variable. Carbon repeats nothing, so a long hold is exactly one press and one release. To handle the two edges separately instead, pass `up=`, as in `hotkey(combo, on_press, up=on_release)`.
 
 A bare modifier such as right Option cannot be a Carbon hotkey, so `holdmod` reads the event tap instead, and takes the same handlers:
 
@@ -74,7 +74,7 @@ A bare modifier such as right Option cannot be a Carbon hotkey, so `holdmod` rea
 from macmage import holdmod
 
 @holdmod('ropt', hold=True)
-def talk():
+async def talk():
     rec = start_recording()
     yield
     rec.stop()
@@ -116,11 +116,11 @@ def log(kind, vk, flags): print(kind, vk, flags)
 ```python
 from macmage import press, type_text
 
-type_text('Hello from macmage\n')
+await type_text('Hello from macmage\n')
 press('cmd-s')
 ```
 
-`type_text` types a string into the focused application. `press` sends one key combination. Both need an Accessibility grant, and raise `ImpError` when it is missing rather than failing silently, since macOS drops unauthorized synthetic events without an error.
+`type_text` (a coroutine, like everything here that touches the outside world) types a string into the focused application. `press` sends one key combination. Both need an Accessibility grant, and raise `ImpError` when it is missing rather than failing silently, since macOS drops unauthorized synthetic events without an error.
 
 `type_text` waits, for up to a second, until no modifier key is physically held. Applications read live modifier state when interpreting its events, so text typed while the triggering hotkey is still down arrives mangled or not at all. In practice a hotkey handler that types will do so the moment you let go of the combination.
 
@@ -143,55 +143,46 @@ open_app('Ghostty')
 ## Telling you something
 
 ```python
-from macmage import alert, notify, pick, show
+from macmage import alert, notify, pick, show, web
 
-notify('macmage', 'clipboard cleaned')
-if alert('Delete everything?', 'This cannot be undone.', 'Delete', 'Cancel') == 0: wipe()
-show('macmage logs', log_text)
-if (i := pick('Reply with', ['thanks!', 'on it', 'ship it'])) is not None: type_text(replies[i])
+await notify('macmage', 'clipboard cleaned')
+if await alert('Delete everything?', 'This cannot be undone.', 'Delete', 'Cancel') == 0: wipe()
+await show('macmage logs', log_text)
+if (i := await pick('Reply with', ['thanks!', 'on it', 'ship it'])) is not None: await type_text(replies[i])
+await web('https://answer.ai')
 ```
 
-A background agent has nowhere to print, and macOS will not let an unbundled process speak to the user at all: Notification Center refuses a process with no bundle, and a window needs an application to own it. These helpers hand the job to Imp, which is one. `notify` posts a banner and returns at once. `alert` waits and returns the button index. `show` displays text monospaced, scrollable, and selectable, so long output needs neither an alert's single box nor the clipboard. `pick` shows a numbered menu, returns the chosen index, and returns `None` when dismissed; a leader keymap's actions read better through it than as blind letters. Esc or the close button dismisses any of them.
-
-`alert`, `show`, and `pick` block until dismissed, and handlers share one worker thread, so every other hotkey waits behind a panel that is still on screen.
+A background agent has nowhere to print, and macOS will not let an unbundled process speak to the user at all: Notification Center refuses a process with no bundle, and a window needs an application to own it. These helpers hand the job to Imp, which is one. `notify` posts a banner and returns at once. `alert` returns the button index once dismissed. `show` displays text monospaced, scrollable, and selectable, so long output needs neither an alert's single box nor the clipboard. `pick` shows a numbered menu, returns the chosen index, and returns `None` when dismissed; a leader keymap's actions read better through it than as blind letters. `web` shows a page or local file. Esc or the close button dismisses any of them. All five are coroutines: a wisp waits on a person, so awaiting it parks only that cantrip, and every other trigger stays live while a panel is up.
 
 ## Driving Imp
 
 ```python
-from macmage import Imp
+from macmage import Imp, aimp
 
 Imp(grant='microphone')
-Imp(notify=('macmage', 'clipboard cleaned'))
 ok = Imp(check='screen,accessibility').returncode == 0
 r = Imp('python', 'watch_keys.py')
+r = await aimp(pick=('choose', 'a', 'b'))
 ```
 
-`Imp()` builds and runs an Imp command line, and the helpers above go through it. Keyword arguments become flags, in the order given and ahead of the positional arguments: a value is passed through (`grant='microphone'`), `True` makes a bare flag (`status=True`), a list or tuple becomes one argument each (`alert=('Delete?', '', 'Delete', 'Cancel')`), and an underscore in a name becomes a hyphen. Positional arguments are the command Imp runs, with Imp's permissions. The return is the `CompletedProcess` with output captured as text, so `--check` answers in `.returncode` and `--pick` in `.stdout`; `input=` feeds stdin, which `--show` displays. When Imp is not installed it raises `ImpError`, naming the install command.
+`Imp()` builds and runs an Imp command line, and the helpers above go through it. Keyword arguments become flags, in the order given and ahead of the positional arguments: a value is passed through (`grant='microphone'`), `True` makes a bare flag (`status=True`), a list or tuple becomes one argument each (`alert=('Delete?', '', 'Delete', 'Cancel')`), and an underscore in a name becomes a hyphen. Positional arguments are the command Imp runs, with Imp's permissions. The return is the `CompletedProcess` with output captured as text, so `--check` answers in `.returncode` and `--pick` in `.stdout`; `input=` feeds stdin, which `--show` displays. When Imp is not installed it raises `ImpError`, naming the install command. `aimp` is its awaitable twin, returning the same `CompletedProcess` shape (and taking `timeout=`, default None, which kills the child): use it from cantrips for anything that waits on a person (wisps, `--grant`), where blocking the loop would freeze every other trigger.
 
 ## Contacts, calendars, photos, and audio
 
 ```python
-from macmage import contact, events, add_reminder, photos, record, transcribe
+from macmage import contact, events, add_reminder, photos, record, snap, transcribe
 
-contact('Rachel')                     # {'name': 'Rachel ...', 'phones': [...], 'emails': [...]}
-events(days=3)                        # what the next three days hold
-add_reminder('buy milk')
-photos(5)                             # newest five: id, created, size, location
-transcribe(record(5))                 # say something for five seconds, get it back as text
+await contact('Rachel')               # {'name': 'Rachel ...', 'phones': [...], 'emails': [...]}
+await events(days=3)                  # what the next three days hold
+await add_reminder('buy milk')
+await photos(5)                       # newest five: id, created, size, location
+await snap('still.jpg')               # a camera still, exposure settled
+await type_text(await transcribe(await record(5)))  # push-to-talk dictation
 ```
 
-Each of these asks the real macOS store, so each needs its Imp grant: `contacts`, `calendars`, `reminders`, `photos`, `microphone` for `record`, `camera` for `snap`, and `speech` for `transcribe`. One `Imp --grant contacts,calendars,reminders,photos,microphone,camera,speech` covers the lot, and a missing grant raises `ImpError` naming the command. `contacts`/`contact` search by name the way the Contacts app does. `events` looks ahead, and `add_event`/`del_event` write to the default calendar; `reminders`/`add_reminder`/`del_reminder` do the same for the default list. `photos` returns metadata for the newest assets and `save_photo` exports one's original bytes. `snap` captures a camera still in a fresh child process via `apart` (a spawned child holds the same grants, and capture cannot share a process with the hotkey engine's background loop). `record` writes an m4a from the default microphone, and `transcribe` turns any audio file into text with Apple's on-device recognizer, so the pair composes into dictation.
+Each of these asks the real macOS store, so each needs its Imp grant: `contacts`, `calendars`, `reminders`, `photos`, `microphone` for `record`, `camera` for `snap`, and `speech` for `transcribe`. One `Imp --grant contacts,calendars,reminders,photos,microphone,camera,speech` covers the lot, and a missing grant raises `ImpError` naming the command. `contacts`/`contact` search by name the way the Contacts app does. `events` looks ahead, and `add_event`/`del_event` write to the default calendar; `reminders`/`add_reminder`/`del_reminder` do the same for the default list. `photos` returns metadata for the newest assets and `save_photo` exports one's original bytes. All of them are coroutines. The store fetches wrap Apple APIs that only exist in blocking form, so each runs its body on a worker thread (fastcore's `athreaded`); the capture trio is natively async, since each spends seconds against a device. `snap` takes a camera still in-process (the agent's loop delivers the capture delegate), `record` writes an m4a from the default microphone, and `transcribe` turns any audio file into text with Apple's on-device recognizer. Outside the agent, run one with `cfloop.run(record(5))`.
 
-
-```python
-from macmage import apart
-apart(snap_py, 'still.jpg')            # any module-level function, in a fresh process
-apart(slow_thing, timeout=60)          # bounded; raises TimeoutError past the limit
-```
-
-`apart(fn, *args, **kwargs)` runs a function in a freshly spawned process and returns its result, re-raising anything it raises. The child is a descendant of the agent, so it holds the same Imp grants, and it gets its own main loop, which is what camera capture and friends need; a slow call in a hotkey handler also stops blocking every other hotkey. `snap` is built on it.
-
-
+## Permissions
 ## Permissions
 
 Hotkeys need no permission at all, because macOS delivers a registered hotkey without showing the process anything else. Everything that reads or writes the keyboard more broadly needs Accessibility: `type_text`, `press`, `watch`, and `holdmod`.

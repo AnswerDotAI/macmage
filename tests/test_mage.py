@@ -1,8 +1,10 @@
 """What `@mage` does to a handler, checked without touching the keyboard.
 
 Wrapping is easy to get subtly wrong: a function that yields *anywhere* in its body is a
-generator function, so one wrapper cannot serve both plain and `hold` handlers.
+generator function, so one wrapper cannot serve plain, async, and `hold` handlers.
 """
+import asyncio
+
 import pytest
 
 from macmage import mage
@@ -18,22 +20,34 @@ def test_mage_returns_and_swallows():
     def boom(): raise ValueError('deliberate')
     assert boom() is None
 
+    @mage
+    async def adouble(x): return x*2
+    assert asyncio.run(adouble(21))==42
 
-def test_mage_hold_stays_a_generator():
-    "A `hold` handler is wrapped as a generator, so both halves of the body still run"
+    @mage
+    async def aboom(): raise ValueError('deliberate')
+    assert asyncio.run(aboom()) is None
+
+
+def test_mage_hold_stays_an_async_generator():
+    "A `hold` handler is wrapped as an async generator, so both halves of the body still run"
     got = []
     @mage(hold=True)
-    def rec():
+    async def rec():
         got.append('start')
         yield
         got.append('stop')
-    gen = rec()
-    next(gen)
-    assert got==['start']
-    next(gen, None)
-    assert got==['start','stop']
+    async def drive():
+        agen = rec()
+        await anext(agen)
+        assert got==['start']
+        await anext(agen, None)
+        assert got==['start','stop']
+    asyncio.run(drive())
 
 
-def test_mage_hold_rejects_a_plain_function():
-    "A `hold` handler without a `yield` fails at registration, not at the first press"
+def test_mage_hold_rejects_a_sync_function():
+    "A `hold` handler that is not an async generator fails at registration, not at the first press"
     with pytest.raises(ValueError): mage(lambda: None, hold=True)
+    def sync_gen(): yield
+    with pytest.raises(ValueError): mage(sync_gen, hold=True)

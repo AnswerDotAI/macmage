@@ -1,21 +1,13 @@
-"""What Carbon hotkeys and Quartz keyboard events actually do, checked against the real system.
+"""What Carbon hotkeys and Quartz keyboard events actually do, checked against the real system
+under the agent arrangement (the only arrangement): asyncio on cfloop's pump, owning the main
+thread of a subprocess, with a worker thread pressing synthetic keys. A registered hotkey fires
+from a *synthetic* keystroke, which is what lets this suite drive itself, and registration
+needs no permission at all. Punctuation combos per DEV.md: F-keys silently eat synthetic
+presses. `parse_combo` needs no engine, so it stays in-process."""
 
-These run against live macOS APIs rather than fakes, so they double as a record of behaviour
-that is hard to discover: a registered hotkey fires from a *synthetic* keystroke, which is what
-lets this suite drive itself, and registration needs no permission at all.
+import subprocess, sys
 
-Test order matters and is itself a regression test: building the layout map used to poison
-Carbon hotkey dispatch for the rest of the process, so `test_parse_combo` deliberately runs
-before the hotkey test (see DEV.md).
-"""
-
-import threading, time
-
-from Quartz import (CGEventCreate, CGEventPost, CGEventSetFlags, CGEventSetIntegerValueField, CGEventSetType,
-    kCGEventFlagsChanged, kCGHIDEventTap, kCGKeyboardEventKeycode)
-
-from macmage import char2vk, holdmod, hotkey, leader, modkeys, parse_combo, press, specials, unholdmod, unhotkey, unleader, unwatch, watch
-from macmage.keys import _mods_clear, _refs
+from macmage import char2vk, parse_combo, specials
 
 
 def test_parse_combo():
@@ -30,98 +22,20 @@ def test_parse_combo():
     assert parse_combo('cmd--')[1] == 256  # '-' is a key as well as the separator
 
 
-def test_hotkey_fires_from_synthetic_keystroke():
-    "A registered handler runs once per press (and not on release), including when we press it ourselves"
-    fired = []
-    hotkey('ctrl-alt-cmd-;', lambda: fired.append(1))
-    press('ctrl-alt-cmd-;')
-    assert _wait(lambda: fired), 'hotkey handler did not run'
-    time.sleep(0.3)
-    assert len(fired)==1, 'handler ran more than once for a single press'
+SCRIPT = r'''
+import asyncio, threading, time
+from macmage import holdmod, hotkey, leader, modkeys, parse_combo, press, run_loop, stop_keys, unhotkey, unleader, unwatch, watch
+from macmage.keys import _mods_clear, _refs
+from Quartz import (CGEventCreate, CGEventPost, CGEventSetFlags, CGEventSetIntegerValueField, CGEventSetType,
+    kCGEventFlagsChanged, kCGHIDEventTap, kCGKeyboardEventKeycode)
 
 
-def _wait(cond):
-    for _ in range(40):
+def _wait(cond, secs=2):
+    end = time.time()+secs
+    while time.time() < end:
         if cond(): return True
         time.sleep(0.05)
     return False
-
-
-def test_hotkey_replace_and_release():
-    "Re-registering a combo replaces its handler; `unhotkey` frees the combo for later re-registration"
-    a, b = [], []
-    hotkey('ctrl-alt-cmd-8', lambda: a.append(1))
-    hotkey('ctrl-alt-cmd-8', lambda: b.append(1))
-    press('ctrl-alt-cmd-8')
-    assert _wait(lambda: b), 'replacement handler did not run'
-    assert not a, 'replaced handler still ran'
-    unhotkey('ctrl-alt-cmd-8')
-    hotkey('ctrl-alt-cmd-8', lambda: a.append(1))
-    press('ctrl-alt-cmd-8')
-    assert _wait(lambda: a), 'combo did not work after unhotkey and re-register'
-    unhotkey('ctrl-alt-cmd-8')
-
-
-# The mode's keys are pressed only while the mode holds them, since a hotkey suppresses the
-# keystroke and a bare key pressed outside a mode would type into whatever has focus.
-def test_leader_captures_the_next_key():
-    "The leader binds its keys, the key it captures runs its handler, and the keys are released again"
-    got = []
-    leader('ctrl-alt-cmd-9', {'8': lambda: got.append('eight')}, timeout=5)
-    press('ctrl-alt-cmd-9')
-    assert _wait(lambda: '8' in _refs), 'the mode did not bind its keys'
-    press('8')
-    assert _wait(lambda: got == ['eight']), f'the captured key did not run its handler, got {got}'
-    assert _wait(lambda: '8' not in _refs), 'the mode did not release its keys'
-    unleader('ctrl-alt-cmd-9')
-
-
-def test_leader_times_out():
-    "A mode nobody answers releases its keys, so the keyboard is never left captured"
-    leader('ctrl-alt-cmd-9', {'8': lambda: None}, timeout=0.5)
-    press('ctrl-alt-cmd-9')
-    assert _wait(lambda: '8' in _refs), 'the mode did not bind its keys'
-    assert _wait(lambda: '8' not in _refs), 'the mode did not time out'
-    unleader('ctrl-alt-cmd-9')
-
-
-def test_watch_sees_keystrokes():
-    "A listen tap reports key events, including combos our own hotkey claims and suppresses"
-    seen, fired = [], []
-    w = watch(lambda kind, vk, flags: seen.append((kind, vk)))
-    hotkey('ctrl-alt-cmd-0', lambda: fired.append(1))
-    press('ctrl-alt-cmd-0')
-    assert _wait(lambda: fired), 'hotkey handler did not run alongside the tap'
-    vk = parse_combo('ctrl-alt-cmd-0')[0]
-    assert _wait(lambda: ('down', vk) in seen), 'tap did not see the keydown'
-    assert ('up', vk) in seen, 'tap did not see the keyup'
-    unhotkey('ctrl-alt-cmd-0')
-    unwatch(w)
-
-
-def test_hotkey_up_handler():
-    "A press and its release dispatch separately, so a handler can run on key-up"
-    got = []
-    hotkey('ctrl-alt-cmd-7', lambda: got.append('down'), up=lambda: got.append('up'))
-    press('ctrl-alt-cmd-7')
-    assert _wait(lambda: got==['down','up']), f'expected a down then an up, got {got}'
-    unhotkey('ctrl-alt-cmd-7')
-
-
-def test_hold_generator():
-    "A `hold` handler runs up to its `yield` on press and the rest on release, on its own thread so a slow body cannot delay the release"
-    got, running = [], threading.Event()
-    @hotkey('ctrl-alt-cmd-6', hold=True)
-    def rec():
-        got.append('start')
-        running.set()
-        time.sleep(0.3)  # a blocking body is the whole point: recording lasts as long as the key is held
-        yield
-        got.append('stop')
-    press('ctrl-alt-cmd-6')
-    assert _wait(lambda: got==['start','stop']), f'expected start then stop, got {got}'
-    assert running.is_set()
-    unhotkey('ctrl-alt-cmd-6')
 
 
 def _mod_event(vk, flags):
@@ -133,14 +47,105 @@ def _mod_event(vk, flags):
     CGEventPost(kCGHIDEventTap, ev)
 
 
-def test_holdmod_derives_both_edges_of_a_bare_modifier():
-    "Carbon cannot register a bare modifier, so `holdmod` reads the tap: a modifier change carries the key's own code, and its device-specific flag bit says which way it went"
-    vk, devmask = modkeys['ropt']
-    got = []
-    holdmod('ropt', lambda: got.append('down'), up=lambda: got.append('up'))
-    _mod_event(vk, devmask)
-    assert _wait(lambda: got==['down']), f'expected a down, got {got}'
-    _mod_event(vk, 0)
-    assert _wait(lambda: got==['down','up']), f'expected a down then an up, got {got}'
-    unholdmod('ropt')
-    assert _wait(_mods_clear), 'the test left a modifier held down'
+def ok(name, cond): print(f'{name}: {"ok" if cond else "FAIL"}', flush=True)
+
+
+def checks():
+    time.sleep(0.5)
+
+    # A registered handler runs once per press (and not on release)
+    fired = []
+    hotkey('ctrl-alt-cmd-;', lambda: fired.append(1))
+    press('ctrl-alt-cmd-;')
+    got_one = _wait(lambda: fired)
+    time.sleep(0.3)
+    ok('fires_once', got_one and len(fired)==1)
+
+    # Re-registering replaces; unhotkey frees the combo for re-registration
+    a, b = [], []
+    hotkey('ctrl-alt-cmd-8', lambda: a.append(1))
+    hotkey('ctrl-alt-cmd-8', lambda: b.append(1))
+    press('ctrl-alt-cmd-8')
+    replaced = _wait(lambda: b) and not a
+    unhotkey('ctrl-alt-cmd-8')
+    hotkey('ctrl-alt-cmd-8', lambda: a.append(1))
+    press('ctrl-alt-cmd-8')
+    ok('replace_release', replaced and _wait(lambda: a))
+    unhotkey('ctrl-alt-cmd-8')
+
+    # A press and its release dispatch separately
+    updown = []
+    hotkey('ctrl-alt-cmd-7', lambda: updown.append('down'), up=lambda: updown.append('up'))
+    press('ctrl-alt-cmd-7')
+    ok('up_handler', _wait(lambda: updown==['down','up']))
+    unhotkey('ctrl-alt-cmd-7')
+
+    # A `hold` async generator runs to its yield on press as a task and the rest on release;
+    # awaiting in the body must not delay the release
+    hgot, running = [], threading.Event()
+    async def rec():
+        hgot.append('start')
+        running.set()
+        await asyncio.sleep(0.3)  # a slow body is the point: it must not delay the release
+        yield
+        hgot.append('stop')
+    hotkey('ctrl-alt-cmd-6', rec, hold=True)
+    press('ctrl-alt-cmd-6')
+    ok('hold', _wait(lambda: hgot==['start','stop']) and running.is_set())
+    unhotkey('ctrl-alt-cmd-6')
+
+    # The leader binds its keys, the captured key runs its handler, and the keys are released
+    lgot = []
+    leader('ctrl-alt-cmd-9', {'8': lambda: lgot.append('eight')}, timeout=5)
+    press('ctrl-alt-cmd-9')
+    bound = _wait(lambda: '8' in _refs)
+    press('8')
+    ok('leader', bound and _wait(lambda: lgot==['eight']) and _wait(lambda: '8' not in _refs))
+    unleader('ctrl-alt-cmd-9')
+
+    # A mode nobody answers releases its keys
+    leader('ctrl-alt-cmd-9', {'8': lambda: None}, timeout=0.5)
+    press('ctrl-alt-cmd-9')
+    ok('leader_timeout', _wait(lambda: '8' in _refs) and _wait(lambda: '8' not in _refs))
+    unleader('ctrl-alt-cmd-9')
+
+    # A listen tap reports key events, including combos our own hotkey claims and suppresses
+    seen, wfired = [], []
+    w = watch(lambda kind, vk, flags: seen.append((kind, vk)))
+    hotkey('ctrl-alt-cmd-0', lambda: wfired.append(1))
+    press('ctrl-alt-cmd-0')
+    vk = parse_combo('ctrl-alt-cmd-0')[0]
+    ok('watch', _wait(lambda: wfired) and _wait(lambda: ('down', vk) in seen) and ('up', vk) in seen)
+    unhotkey('ctrl-alt-cmd-0')
+    unwatch(w)
+
+    # holdmod reads both edges of a bare modifier from the tap
+    mvk, devmask = modkeys['ropt']
+    mgot = []
+    holdmod('ropt', lambda: mgot.append('down'), up=lambda: mgot.append('up'))
+    _mod_event(mvk, devmask)
+    down_ok = _wait(lambda: mgot==['down'])
+    _mod_event(mvk, 0)
+    ok('holdmod', down_ok and _wait(lambda: mgot==['down','up']) and _wait(_mods_clear))
+
+
+def worker():
+    try: checks()
+    except Exception:
+        import traceback
+        traceback.print_exc()
+    finally: stop_keys()
+
+
+run_loop(lambda: threading.Thread(target=worker, daemon=True).start())
+print('clean exit', flush=True)
+'''
+
+MARKERS = ['fires_once', 'replace_release', 'up_handler', 'hold', 'leader', 'leader_timeout', 'watch', 'holdmod']
+
+
+def test_keys_semantics():
+    "Every hotkey, hold, leader, watch, and holdmod behavior, in one agent-arrangement subprocess"
+    r = subprocess.run([sys.executable, '-c', SCRIPT], capture_output=True, text=True, timeout=15)
+    for m in MARKERS: assert f'{m}: ok' in r.stdout, r.stdout + r.stderr
+    assert 'clean exit' in r.stdout, r.stdout + r.stderr

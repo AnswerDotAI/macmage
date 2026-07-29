@@ -35,13 +35,13 @@ def frontmost():
     return dict(name=str(a.localizedName()), bundle_id=str(a.bundleIdentifier()), pid=int(a.processIdentifier()))
 
 
-def tell(
+async def tell(
     bundle_id:str, # The target app, e.g. from `frontmost`
     script:str, # AppleScript to run inside its tell block
     timeout:float=30 # Seconds before the run is killed
 ):
     "Run AppleScript against one app through Imp, whose `automation:<bundle_id>` grant it uses"
-    from .imp import Imp
-    r = Imp('osascript', '-e', f'tell application id "{bundle_id}"\n{script}\nend tell', timeout=timeout)
+    from .imp import aimp
+    r = await aimp('osascript', '-e', f'tell application id "{bundle_id}"\n{script}\nend tell', timeout=timeout)
     if r.returncode: raise RuntimeError(r.stderr.strip() or f'osascript failed ({r.returncode})')
     return r.stdout.strip()
