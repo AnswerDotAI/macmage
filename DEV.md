@@ -26,6 +26,10 @@ See `meta/FEATURES.md` for the candidate-feature list (and what was decided agai
 - `QuickMacHotKey` (glyph): the pyobjc HIToolbox metadata this package's `_hitoolbox.py` is built from.
 - `skhd.zig`: event-tap school; retries `CGEventTapCreate` at early login; synthesizes modifiers as real key events with `CGEnableEventStateCombining(false)`; synthesize is a separate CLI invocation, not in-process.
 
+## Kernel dev helpers (devtool.py)
+
+`devtool.py` at the repo root is for kernel sessions, not part of the package. `run_tests()` runs pytest under Imp, which the keyboard tests need for permissions; started from a terminal they would use the terminal's grants instead. Extra arguments pass through to pytest, so `run_tests('tests/test_imp.py')` runs one file. `build_imp()` builds, signs, and zips Imp from `~/git/imp`, keeping the bundle id, the version (read from `impVersion` in `main.swift`), the Info.plist usage strings (`imp_plist`), and the unhardened signing choice in one place; Imp's DEV.md records why unhardened.
+
 ## Synthetic input fired while the trigger is still held (2026-07-28)
 
 A hotkey handler runs while its own combination is still physically down, and that breaks synthetic input in two separate ways.

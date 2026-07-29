@@ -7,7 +7,9 @@ from .clip import *
 from .keys import *
 from .keys import _layout_cache
 from .ui import *
-from .imp import ImpError, agent, agent_state, imp_check, install_msg, launcher, unagent, as_imp, need
+from .pim import *
+from .media import *
+from .imp import ImpError, agent, agent_state, Imp, imp_check, install_msg, launcher, unagent, as_imp, need
 
 __version__ = "0.1.0"
 

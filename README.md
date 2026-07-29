@@ -155,6 +155,33 @@ A background agent has nowhere to print, and macOS will not let an unbundled pro
 
 `alert`, `show`, and `pick` block until dismissed, and handlers share one worker thread, so every other hotkey waits behind a panel that is still on screen.
 
+## Driving Imp
+
+```python
+from macmage import Imp
+
+Imp(grant='microphone')
+Imp(notify=('macmage', 'clipboard cleaned'))
+ok = Imp(check='screen,accessibility').returncode == 0
+r = Imp('python', 'watch_keys.py')
+```
+
+`Imp()` builds and runs an Imp command line, and the helpers above go through it. Keyword arguments become flags, in the order given and ahead of the positional arguments: a value is passed through (`grant='microphone'`), `True` makes a bare flag (`status=True`), a list or tuple becomes one argument each (`alert=('Delete?', '', 'Delete', 'Cancel')`), and an underscore in a name becomes a hyphen. Positional arguments are the command Imp runs, with Imp's permissions. The return is the `CompletedProcess` with output captured as text, so `--check` answers in `.returncode` and `--pick` in `.stdout`; `input=` feeds stdin, which `--show` displays. When Imp is not installed it raises `ImpError`, naming the install command.
+
+## Contacts, calendars, photos, and audio
+
+```python
+from macmage import contact, events, add_reminder, photos, record, transcribe
+
+contact('Rachel')                     # {'name': 'Rachel ...', 'phones': [...], 'emails': [...]}
+events(days=3)                        # what the next three days hold
+add_reminder('buy milk')
+photos(5)                             # newest five: id, created, size, location
+transcribe(record(5))                 # say something for five seconds, get it back as text
+```
+
+Each of these asks the real macOS store, so each needs its Imp grant: `contacts`, `calendars`, `reminders`, `photos`, `microphone` for `record`, and `speech` for `transcribe`. One `Imp --grant contacts,calendars,reminders,photos,microphone,speech` covers the lot, and a missing grant raises `ImpError` naming the command. `contacts`/`contact` search by name the way the Contacts app does. `events` looks ahead, and `add_event`/`del_event` write to the default calendar; `reminders`/`add_reminder`/`del_reminder` do the same for the default list. `photos` returns metadata for the newest assets and `save_photo` exports one's original bytes. `record` writes an m4a from the default microphone, and `transcribe` turns any audio file into text with Apple's on-device recognizer, so the pair composes into dictation.
+
 
 ## Permissions
 

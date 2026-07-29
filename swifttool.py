@@ -11,13 +11,14 @@ def build_app(
     path, # Swift package directory
     bundle_id:str, # CFBundleIdentifier, which TCC grants attach to
     identity:str=None, # Signing identity; the sole Developer ID one if None
+    hardened:bool=True, # Enable the hardened runtime, which requires an entitlement per protected resource
     **plist # Extra Info.plist entries
 ):
     "Build, sign, and archive a Swift package, always as `build/<Name>.app` and `dist/<Name>.app.zip`, so the two cannot drift from the source or each other"
     path = Path(path).expanduser()
     exe = swift_build(path)
     app = mk_app(exe, path/f'build/{exe.name}.app', bundle_id, **plist)
-    sign(app, identity)
+    sign(app, identity, hardened)
     return app, zip_app(app, path/f'dist/{exe.name}.app.zip')
 
 
@@ -68,11 +69,13 @@ def mk_app(
 
 def sign(
     path, # Bundle or binary to sign
-    identity:str=None # Signing identity; the sole Developer ID one if None
+    identity:str=None, # Signing identity; the sole Developer ID one if None
+    hardened:bool=True # Enable the hardened runtime, which requires an entitlement per protected resource
 ):
     "Code-sign `path`, replacing any existing signature"
     if identity is None: identity = first(o for o in signing_ids() if o.startswith('Developer ID'))
-    run('codesign', '--force', '--sign', identity, '--options', 'runtime', path)
+    opts = ['--options', 'runtime'] if hardened else []
+    run('codesign', '--force', '--sign', identity, *opts, path)
     return identity
 
 

@@ -2,10 +2,9 @@
 
 from fastcore.utils import *
 import ctypes, plistlib, subprocess
-from ApplicationServices import AXIsProcessTrusted
 from .util import wait_until
 
-__all__ = ['ImpError', 'app_path', 'launcher', 'install_msg', 'as_imp', 'need', 'imp_check', 'agent_state', 'agent', 'unagent']
+__all__ = ['ImpError', 'app_path', 'launcher', 'install_msg', 'Imp', 'as_imp', 'need', 'imp_check', 'agent_state', 'agent', 'unagent']
 
 app_path = Path.home()/'Applications/Imp.app'
 launcher = app_path/'Contents/MacOS/Imp'
@@ -19,6 +18,25 @@ _libc.responsibility_get_pid_responsible_for_pid.restype = ctypes.c_int
 class ImpError(RuntimeError): pass
 
 
+def _argv(*args, **flags):
+    res = [str(launcher)]
+    for k,v in flags.items():
+        res.append(f'--{k.replace("_","-")}')
+        if v is not True: res += [str(o) for o in v] if isinstance(v, (list,tuple)) else [str(v)]
+    return res + [str(o) for o in args]
+
+
+def Imp(
+    *args, # The command for Imp to run, after any flags
+    input:str=None, # Text to feed to stdin, which `--show` displays
+    **flags # Imp flags, ahead of `args`: a value passes through, `True` makes a bare flag, a list or tuple becomes one argument each, and underscores become hyphens
+):
+    "Run Imp with `flags` and `args`, returning the `CompletedProcess` with text output captured"
+    if not launcher.exists(): raise ImpError(f'Imp is not installed: {install_msg}')
+    return subprocess.run(_argv(*args, **flags), capture_output=True, text=True, input=input)
+
+
+
 def _exe(pid):
     buf = ctypes.create_string_buffer(4096)
     return buf.value.decode() if _libc.proc_pidpath(pid, buf, 4096) > 0 else ''
@@ -30,7 +48,6 @@ def as_imp():
     return _exe(rpid) == str(launcher.resolve())
 
 
-_checks = dict(accessibility=AXIsProcessTrusted)
 _ok = set()
 
 
@@ -44,7 +61,7 @@ def need(
         f'macmage needs {", ".join(todo)}, which only applies to processes run under Imp.\n'
         f'Run it as: {launcher} {sys.executable} ...\n'
         f'For the agent: macmage --install' + ('' if launcher.exists() else f'\nImp is not installed: {install_msg}'))
-    missing = [o for o in todo if not _checks[o]()]
+    missing = [o for o in todo if Imp(check=o).returncode != 0]
     if missing: raise ImpError(
         f'Imp has not been granted {", ".join(missing)}.\n'
         f'Run: Imp --grant {",".join(missing)}\n'
@@ -61,7 +78,7 @@ def imp_check(
 ):
     "Whether Imp has been granted `names`, asked of Imp itself, so the answer holds wherever this runs"
     if not launcher.exists(): return False
-    return subprocess.run([str(launcher), '--check', ','.join(names)], capture_output=True).returncode==0
+    return Imp(check=','.join(names)).returncode==0
 
 
 def agent_state(

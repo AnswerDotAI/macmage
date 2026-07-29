@@ -16,7 +16,9 @@ classifiers = [
 ]
 
 dependencies = ['fastcore>=2.1.12', 'pyobjc-framework-Cocoa>=12.2.1', 'pyobjc-framework-Quartz>=12.2.1',
-    'pyobjc-framework-ApplicationServices>=12.2.1']
+    'pyobjc-framework-ApplicationServices>=12.2.1', 'pyobjc-framework-Contacts>=12.2.1',
+    'pyobjc-framework-EventKit>=12.2.1', 'pyobjc-framework-Photos>=12.2.1',
+    'pyobjc-framework-Speech>=12.2.1', 'pyobjc-framework-AVFoundation>=12.2.1']
 
 [project.scripts]
 macmage = "macmage:main"

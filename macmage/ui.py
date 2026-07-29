@@ -1,15 +1,8 @@
 "Showing things to the user, which goes through Imp because only a bundled app may"
 
-import subprocess
-
-from .imp import ImpError, install_msg, launcher
+from .imp import Imp
 
 __all__ = ['notify', 'alert', 'pick', 'show']
-
-
-def _imp(*args):
-    if not launcher.exists(): raise ImpError(f'Imp is not installed: {install_msg}')
-    return subprocess.run([str(launcher), *[str(o) for o in args]]).returncode
 
 
 def notify(
@@ -17,7 +10,7 @@ def notify(
     body:str='' # The rest of the notification
 ):
     "Post a notification, returning whether it went out. Needs Imp's `notifications` permission"
-    return _imp('--notify', title, body) == 0
+    return Imp(notify=(title, body)).returncode == 0
 
 
 def alert(
@@ -26,7 +19,7 @@ def alert(
     *buttons:str # Button titles, left to right; one `OK` button when none are given
 ):
     "Show a message box and wait, returning the index of the button pressed. Blocks the handler until it is dismissed"
-    return _imp('--alert', title, body, *buttons)
+    return Imp(alert=(title, body, *buttons)).returncode
 
 
 def pick(
@@ -34,8 +27,7 @@ def pick(
     items:list, # Up to ten choices, shown with their digits
 ):
     "Show a numbered menu and wait, returning the chosen index, or None when dismissed. Blocks the handler until answered"
-    if not launcher.exists(): raise ImpError(f'Imp is not installed: {install_msg}')
-    r = subprocess.run([str(launcher), '--pick', title, *[str(o) for o in items]], capture_output=True, text=True)
+    r = Imp(pick=(title, *items))
     return int(r.stdout) if r.returncode == 0 else None
 
 
@@ -44,5 +36,4 @@ def show(
     text:str, # What to display, monospaced and selectable
 ):
     "Show text in a scrollable panel and wait until it is dismissed"
-    if not launcher.exists(): raise ImpError(f'Imp is not installed: {install_msg}')
-    subprocess.run([str(launcher), '--show', title], input=text, text=True)
+    Imp(show=title, input=text)
