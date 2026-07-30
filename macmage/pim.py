@@ -1,6 +1,5 @@
 "Contacts, calendars, and reminders, each needing its Imp permission"
 
-import threading
 from datetime import datetime, timedelta
 
 from fastcore.utils import *
@@ -10,16 +9,13 @@ from EventKit import EKEvent, EKEventStore, EKReminder, EKSpanThisEvent
 from Foundation import NSCalendar, NSCalendarUnitDay, NSCalendarUnitHour, NSCalendarUnitMinute, NSCalendarUnitMonth, NSCalendarUnitYear, NSDate
 
 from fastcore.aio import athreaded
+from .cocoa import chk, nsdate, pydate, setprops, wait_cb
 from .imp import need
 
 __all__ = ['contacts', 'contact', 'events', 'add_event', 'del_event', 'reminders', 'add_reminder', 'del_reminder']
 
 _ckeys = [CNContactGivenNameKey, CNContactFamilyNameKey, CNContactOrganizationNameKey,
     CNContactPhoneNumbersKey, CNContactEmailAddressesKey]
-
-
-def _nsdate(dt): return NSDate.dateWithTimeIntervalSince1970_(dt.timestamp())
-def _pydate(d): return datetime.fromtimestamp(d.timeIntervalSince1970()) if d is not None else None
 
 
 def _cndict(c):
@@ -35,8 +31,7 @@ def contacts(
     "Contacts matching `name`: dicts of name, org, phones, and emails"
     need('contacts')
     pred = CNContact.predicateForContactsMatchingName_(name)
-    res, err = CNContactStore.alloc().init().unifiedContactsMatchingPredicate_keysToFetch_error_(pred, _ckeys, None)
-    if err is not None: raise RuntimeError(str(err))
+    res = chk(CNContactStore.alloc().init().unifiedContactsMatchingPredicate_keysToFetch_error_(pred, _ckeys, None))
     return L(res).map(_cndict)
 
 
@@ -48,8 +43,8 @@ async def contact(
 
 
 def _evdict(e):
-    return dict(id=str(e.eventIdentifier()), title=str(e.title()), start=_pydate(e.startDate()),
-        end=_pydate(e.endDate()), cal=str(e.calendar().title()))
+    return dict(id=str(e.eventIdentifier()), title=str(e.title()), start=pydate(e.startDate()),
+        end=pydate(e.endDate()), cal=str(e.calendar().title()))
 
 
 @athreaded
@@ -73,14 +68,10 @@ def add_event(
     "Add an event to the default calendar, returning its id"
     need('calendars')
     s = EKEventStore.alloc().init()
-    ev = EKEvent.eventWithEventStore_(s)
-    ev.setTitle_(title)
-    ev.setStartDate_(_nsdate(start))
-    ev.setEndDate_(_nsdate(end or start+timedelta(hours=1)))
-    ev.setCalendar_(s.defaultCalendarForNewEvents())
+    ev = setprops(EKEvent.eventWithEventStore_(s), title=title, startDate=nsdate(start),
+        endDate=nsdate(end or start+timedelta(hours=1)), calendar=s.defaultCalendarForNewEvents())
     if notes: ev.setNotes_(notes)
-    ok, err = s.saveEvent_span_error_(ev, EKSpanThisEvent, None)
-    if not ok: raise RuntimeError(str(err))
+    chk(s.saveEvent_span_error_(ev, EKSpanThisEvent, None))
     return str(ev.eventIdentifier())
 
 
@@ -93,14 +84,13 @@ def del_event(
     s = EKEventStore.alloc().init()
     ev = s.eventWithIdentifier_(id)
     if ev is None: raise ValueError(f'no event {id}')
-    ok, err = s.removeEvent_span_error_(ev, EKSpanThisEvent, None)
-    if not ok: raise RuntimeError(str(err))
+    chk(s.removeEvent_span_error_(ev, EKSpanThisEvent, None))
 
 
 def _rmdict(r):
     due = r.dueDateComponents()
     return dict(id=str(r.calendarItemIdentifier()), title=str(r.title()), done=bool(r.isCompleted()),
-        due=_pydate(NSCalendar.currentCalendar().dateFromComponents_(due)) if due is not None else None)
+        due=pydate(NSCalendar.currentCalendar().dateFromComponents_(due)) if due is not None else None)
 
 
 @athreaded
@@ -110,13 +100,8 @@ def reminders(
     "Reminders across all lists: dicts of id, title, done, and due"
     need('reminders')
     s = EKEventStore.alloc().init()
-    got, evt = [], threading.Event()
-    def cb(rs):
-        got.extend(rs or [])
-        evt.set()
-    s.fetchRemindersMatchingPredicate_completion_(s.predicateForRemindersInCalendars_(None), cb)
-    if not evt.wait(10): raise TimeoutError('EventKit did not answer')
-    return L(got).filter(lambda r: bool(r.isCompleted())==done).map(_rmdict)
+    got, = wait_cb(lambda cb: s.fetchRemindersMatchingPredicate_completion_(s.predicateForRemindersInCalendars_(None), cb))
+    return L(got or []).filter(lambda r: bool(r.isCompleted())==done).map(_rmdict)
 
 
 @athreaded
@@ -128,15 +113,12 @@ def add_reminder(
     "Add a reminder to the default list, returning its id"
     need('reminders')
     s = EKEventStore.alloc().init()
-    r = EKReminder.reminderWithEventStore_(s)
-    r.setTitle_(title)
-    r.setCalendar_(s.defaultCalendarForNewReminders())
+    r = setprops(EKReminder.reminderWithEventStore_(s), title=title, calendar=s.defaultCalendarForNewReminders())
     if notes: r.setNotes_(notes)
     if due:
         units = NSCalendarUnitYear|NSCalendarUnitMonth|NSCalendarUnitDay|NSCalendarUnitHour|NSCalendarUnitMinute
-        r.setDueDateComponents_(NSCalendar.currentCalendar().components_fromDate_(units, _nsdate(due)))
-    ok, err = s.saveReminder_commit_error_(r, True, None)
-    if not ok: raise RuntimeError(str(err))
+        r.setDueDateComponents_(NSCalendar.currentCalendar().components_fromDate_(units, nsdate(due)))
+    chk(s.saveReminder_commit_error_(r, True, None))
     return str(r.calendarItemIdentifier())
 
 
@@ -149,5 +131,4 @@ def del_reminder(
     s = EKEventStore.alloc().init()
     r = s.calendarItemWithIdentifier_(id)
     if r is None: raise ValueError(f'no reminder {id}')
-    ok, err = s.removeReminder_commit_error_(r, True, None)
-    if not ok: raise RuntimeError(str(err))
+    chk(s.removeReminder_commit_error_(r, True, None))

@@ -1,12 +1,10 @@
-import os, re, subprocess, sys
+from fastcore.utils import *
+import asyncio, subprocess, time
 from functools import partial
 from itertools import cycle
-from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from fastcore.utils import maybe_await
-from macmage import (aimp, alert, contact, events, frontmost, leader, mage, map_clip, notify, open_app,
-    photos, pick, record, reminders, show, snap, stop_keys, transcribe, type_text, web)
+from macmage import *
 
 state = Path('~/.local/state/macmage').expanduser()
 
@@ -85,8 +83,44 @@ async def _menu(title, acts):
 
 @mage(keys='ctrl-alt-cmd-m')
 async def mage_menu():
-    await _menu('macmage', [('status', status), ('logs', logs), ('automate frontmost', automate_this),
-        ('edit config', partial(open_app, 'MacVim', '~/.config/macmage/config.py')), ('restart agent', restart)])
+    await _menu('macmage', [('_status', status), ('_logs', logs), ('_automate frontmost', automate_this),
+        ('_edit config', partial(open_app, 'MacVim', '~/.config/macmage/config.py')), ('_restart agent', restart)])
+
+
+# Timer: ctrl-alt-cmd-t toggles. Pick a duration; 0 is a stopwatch the same key stops, putting
+# the elapsed seconds in the clipboard; the rest count down in a badge to an alert and a tone.
+_timer = {}
+
+
+async def _run_timer(secs):
+    t0 = time.monotonic()
+    try:
+        if secs:
+            async with badge(str(secs), title='timer') as b:
+                for left in range(secs - 1, -1, -1):
+                    await asyncio.sleep(1)
+                    await b.set(str(left))
+                    if b.dismissed: return
+            tone()
+            await alert('timer', f'{secs} seconds are up')
+        else:
+            async with badge('0', title='stopwatch') as b:
+                while not b.dismissed:
+                    await asyncio.sleep(1)
+                    await b.set(str(round(time.monotonic() - t0)))
+    except asyncio.CancelledError:
+        if not secs: set_clip(str(round(time.monotonic() - t0)))
+        raise
+    finally: _timer.pop('task', None)
+
+
+@mage(keys='ctrl-alt-cmd-t')
+async def timer():
+    "Toggle: start a timer from a pick, or stop the running one (a stopped stopwatch's seconds go to the clipboard)"
+    if (t := _timer.pop('task', None)): return t.cancel()
+    secs = [0, 5, 10, 20, 60, 120, 240, 600]
+    if (i := await pick('timer secs', ['0 (stopwatch)'] + [str(o) for o in secs[1:]])) is not None:
+        _timer['task'] = asyncio.create_task(_run_timer(secs[i]))
 
 
 # Demos: every wisp and every Imp grant, one menu. ctrl-alt-cmd-d
@@ -124,12 +158,12 @@ async def demo_dictate():
 
 @mage(keys='ctrl-alt-cmd-d')
 async def demo():
-    await _menu('demos', [('notify', partial(notify, 'macmage', 'this banner came from Python, via Imp')),
-        ('alert', partial(alert, 'A wisp', 'Buttons exit with their index.', 'Nice', 'Very nice')),
-        ('web', partial(web, 'https://answer.ai', 'a web wisp')), ('contact', demo_contact), ('events', demo_events),
-        ('reminders', demo_reminders), ('photos', demo_photos), ('snap', demo_snap), ('dictate', demo_dictate)])
+    await _menu('demos', [('_notify', partial(notify, 'macmage', 'this banner came from Python, via Imp')),
+        ('_alert', partial(alert, 'A wisp', 'Buttons exit with their index.', 'Nice', 'Very nice')),
+        ('_web', partial(web, 'https://answer.ai', 'a web wisp')), ('_contact', demo_contact), ('_events', demo_events),
+        ('_reminders', demo_reminders), ('_photos', demo_photos), ('_snap', demo_snap), ('_dictate', demo_dictate)])
 
 
 # Site-local additions that do not belong in the repo: create config_local.py beside config.py
-try: import config_local
+try: import config_local  # chkstyle: ignore - the side-effect import is the mechanism
 except ImportError: pass

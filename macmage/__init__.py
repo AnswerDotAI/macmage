@@ -59,12 +59,13 @@ def mage(
 
 def _watch_config(loop):
     "Reload on any config change: kqueue vnode events surface through the loop's own selector"
-    kq = select.kqueue()
+    global _watch_kq  # `select.kqueue` closes its fd when the object is collected, so a local here means watching a dead fd
+    _watch_kq = select.kqueue()
     fds = [os.open(p, os.O_EVTONLY) for p in (config_dir, *config_dir.glob('*.py'))]
     flags = select.KQ_NOTE_WRITE | select.KQ_NOTE_ATTRIB | select.KQ_NOTE_RENAME | select.KQ_NOTE_DELETE
     events = [select.kevent(o, filter=select.KQ_FILTER_VNODE, flags=select.KQ_EV_ADD | select.KQ_EV_ONESHOT, fflags=flags) for o in fds]
-    kq.control(events, 0)
-    loop.add_reader(kq.fileno(), _quit_loop)  # `run` reloads on the main thread once its loop exits
+    _watch_kq.control(events, 0)
+    loop.add_reader(_watch_kq.fileno(), _quit_loop)  # `run` reloads on the main thread once its loop exits
 
 
 def _load_config():

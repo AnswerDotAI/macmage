@@ -143,16 +143,24 @@ open_app('Ghostty')
 ## Telling you something
 
 ```python
-from macmage import alert, notify, pick, show, web
+from macmage import alert, badge, notify, pick, show, tone, web
 
 await notify('macmage', 'clipboard cleaned')
 if await alert('Delete everything?', 'This cannot be undone.', 'Delete', 'Cancel') == 0: wipe()
 await show('macmage logs', log_text)
-if (i := await pick('Reply with', ['thanks!', 'on it', 'ship it'])) is not None: await type_text(replies[i])
+if (i := await pick('Reply with', ['thanks!', 'on it', '_ship it'])) is not None: await type_text(replies[i])
 await web('https://answer.ai')
+
+async with badge('🎙 recording') as b:
+    ...
+    await b.set('🎙 0:42')
 ```
 
-A background agent has nowhere to print, and macOS will not let an unbundled process speak to the user at all: Notification Center refuses a process with no bundle, and a window needs an application to own it. These helpers hand the job to Imp, which is one. `notify` posts a banner and returns at once. `alert` returns the button index once dismissed. `show` displays text monospaced, scrollable, and selectable, so long output needs neither an alert's single box nor the clipboard. `pick` shows a numbered menu, returns the chosen index, and returns `None` when dismissed; a leader keymap's actions read better through it than as blind letters. `web` shows a page or local file. Esc or the close button dismisses any of them. All five are coroutines: a wisp waits on a person, so awaiting it parks only that cantrip, and every other trigger stays live while a panel is up.
+A background agent has nowhere to print, and macOS will not let an unbundled process speak to the user at all: Notification Center refuses a process with no bundle, and a window needs an application to own it. These helpers hand the job to Imp, which is one. `notify` posts a banner and returns at once. `alert` returns the button index once dismissed. `show` displays text monospaced, scrollable, and selectable, so long output needs neither an alert's single box nor the clipboard. `pick` shows a key-driven menu, returns the chosen index, and returns `None` when dismissed: an item's first `_` claims the next character as its key (`_ship it` answers to `s`), and the rest get digits. `web` shows a page or local file. `pick`, `show`, and `web` take `frame=` to place the panel: `'tr'` pins it to the top-right corner of the screen, `'400x300'` sizes it, `'400x300@br'` both. Esc or the close button dismisses any of them. All are coroutines: a wisp waits on a person, so awaiting it parks only that cantrip, and every other trigger stays live while a panel is up.
+
+`badge` is the exception to "takes an answer": a floating corner lamp that never takes focus, alive for its `async with` block. `set` replaces its text, closing the block removes it, and if the person closes it first, `b.dismissed` goes true instead of an error, so an update loop can just stop. The example config's timer (`ctrl-alt-cmd-t`) is the demo: a stopwatch or countdown lives in a badge while you keep typing.
+
+`tone()` plays a short system sound (`tone('Basso')` for any name in /System/Library/Sounds), for moments a banner would be too much - the timer rings one before its alert. It is sync and instant, like `press`: sound needs no bundle and takes no answer.
 
 ## Driving Imp
 

@@ -10,9 +10,9 @@ CFG = Path(__file__).parent.parent/'examples'/'config.py'
 
 
 def test_example_config_compiles_and_imports_resolve():
-    "Syntax holds, and every `from macmage import ...` name is real"
+    "Syntax holds, and any explicitly imported macmage name is real (a `*` import leaves only the compile check)"
     tree = ast.parse(CFG.read_text(), str(CFG))
-    names = [a.name for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module == 'macmage' for a in n.names]
-    assert names, 'the example config no longer imports from macmage?'
+    imports = [n for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module == 'macmage']
+    names = [a.name for n in imports for a in n.names if a.name != '*']
     missing = [o for o in names if not hasattr(macmage, o)]
     assert not missing, f'example config imports names macmage does not export: {missing}'

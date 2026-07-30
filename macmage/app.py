@@ -4,6 +4,8 @@ from AppKit import NSWorkspace, NSWorkspaceOpenConfiguration
 from Foundation import NSURL
 from fastcore.utils import Path
 
+from .cocoa import nsurl
+
 __all__ = ['open_url', 'open_app', 'frontmost', 'tell']
 
 
@@ -22,9 +24,9 @@ def open_app(
     ws = NSWorkspace.sharedWorkspace()
     path = ws.fullPathForApplication_(name)
     if path is None: raise ValueError(f'No application named {name!r}')
-    url, cfg = NSURL.fileURLWithPath_(path), NSWorkspaceOpenConfiguration.configuration()
+    url, cfg = nsurl(path), NSWorkspaceOpenConfiguration.configuration()
     if paths: ws.openURLs_withApplicationAtURL_configuration_completionHandler_(
-        [NSURL.fileURLWithPath_(str(Path(o).expanduser())) for o in paths], url, cfg, None)
+        [nsurl(Path(o).resolve()) for o in paths], url, cfg, None)  # resolve: MacVim mismatches documents opened via a symlink path
     else: ws.openApplicationAtURL_configuration_completionHandler_(url, cfg, None)
     return path
 
