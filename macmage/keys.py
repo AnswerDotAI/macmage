@@ -70,6 +70,14 @@ def char2vk():
     raise RuntimeError('Keyboard layout query keeps returning a partial map; can happen transiently just after login')
 
 
+def _relearn():
+    "Drop the memo and disk caches and query the layout afresh: a cached map must never deny a key for good"
+    char2vk.cache_clear()
+    _layout_cache.unlink(missing_ok=True)
+    return char2vk()
+
+
+
 _modre = re.compile('(' + '|'.join(mods) + r')[-+]', re.I)
 
 
@@ -85,6 +93,7 @@ def parse_combo(
     if vk := re.fullmatch(r'<(\d+)>', rest): return int(vk[1]), mask
     if rest.lower() in specials: return specials[rest.lower()], mask
     vk = char2vk().get(rest.lower())
+    if vk is None: vk = _relearn().get(rest.lower())  # a stale cache may deny a key the live layout has (see DEV.md)
     if vk is None: raise ValueError(f'{rest!r} is not a key on the current keyboard layout')
     return vk, mask
 

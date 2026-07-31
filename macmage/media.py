@@ -3,21 +3,22 @@
 import asyncio, tempfile
 
 from fastcore.utils import *
-from AVFoundation import AVAudioRecorder, AVCapturePhotoSettings, AVFormatIDKey, AVNumberOfChannelsKey, AVSampleRateKey
-from Foundation import NSObject, NSOperationQueue, NSSortDescriptor
-from Photos import PHAsset, PHFetchOptions, PHImageManager, PHImageRequestOptions
-
 from fastcore.aio import athreaded
-from .cocoa import Sig, camera, chk, fetchiter, mk, nsurl, pydate, wait_cb
+from Foundation import NSObject  # raw: delegate subclasses come from unswept NSObject
+from fastcocoa import Sig, camera, nsurl, sortd, topy, wait_cb
+from fastcocoa.avfoundation import AVAudioRecorder, AVCapturePhotoSettings, AVFormatIDKey, AVNumberOfChannelsKey, AVSampleRateKey
+from fastcocoa.foundation import NSOperationQueue
+from fastcocoa.photos import PHAsset, PHImageManager
+from fastcocoa.speech import SFSpeechRecognizer, SFSpeechURLRecognitionRequest
+
 from .imp import need, aneed
 
 __all__ = ['photos', 'save_photo', 'snap', 'record', 'transcribe']
 
 
 def _phdict(a):
-    d = dict(id=str(a.localIdentifier()), created=pydate(a.creationDate()), w=int(a.pixelWidth()),
-        h=int(a.pixelHeight()), video=a.mediaType()==2, favorite=bool(a.isFavorite()))
-    if a.location() is not None: d['lat'],d['lon'] = a.location().coordinate()
+    d = dict(id=a.localIdentifier, created=a.creationDate, w=a.pixelWidth, h=a.pixelHeight, video=a.mediaType==2, favorite=a.favorite)
+    if a.location is not None: d['lat'],d['lon'] = a.location.coordinate
     return d
 
 
@@ -27,8 +28,7 @@ def photos(
 ):
     "Metadata for the newest `n` photo library assets: id, created, size, location, and kind"
     need('photos')
-    o = mk(PHFetchOptions, sortDescriptors=[NSSortDescriptor.sortDescriptorWithKey_ascending_('creationDate', False)], fetchLimit=n)
-    return L(fetchiter(PHAsset.fetchAssetsWithOptions_(o))).map(_phdict)
+    return PHAsset.fetchAssets(sortDescriptors=sortd('-creationDate'), fetchLimit=n).map(_phdict)
 
 
 @athreaded
@@ -38,13 +38,11 @@ def save_photo(
 ):
     "Export an asset's original data to `path`, returning it"
     need('photos')
-    a = PHAsset.fetchAssetsWithLocalIdentifiers_options_([id], None).firstObject()
-    if a is None: raise ValueError(f'no asset {id}')
-    o = mk(PHImageRequestOptions, synchronous=True, networkAccessAllowed=True)
-    data, *_ = wait_cb(lambda cb: PHImageManager.defaultManager().requestImageDataAndOrientationForAsset_options_resultHandler_(a, o, cb))
-    if data is None: raise RuntimeError(f'no data for {id}')
+    a = req(first(PHAsset.fetchAssets(localIdentifiers=[id], options=None)), f'no asset {id}')
+    data = req(wait_cb(PHImageManager.default().requestImageDataAndOrientation, for_=a, networkAccessAllowed=True,
+        resultHandler=...)[0], f'no data for {id}', RuntimeError)
     path = Path(path)
-    path.write_bytes(bytes(data))
+    path.write_bytes(data)
     return path
 
 
@@ -55,7 +53,6 @@ class _SnapDelegate(NSObject):
         self.sig.set()
 
 
-
 async def snap(
     path=None # Where to write the still; a temp file if None
 ):
@@ -64,12 +61,11 @@ async def snap(
     path = Path(path or tempfile.mktemp(suffix='.jpg'))
     with camera() as outp:
         await asyncio.sleep(1.0)  # the first frames are dark while exposure settles
-        d = _SnapDelegate.alloc().init()
+        d = _SnapDelegate()
         d.data, d.sig = None, Sig()
-        outp.capturePhotoWithSettings_delegate_(AVCapturePhotoSettings.photoSettings(), d)
+        outp.capturePhoto(settings=AVCapturePhotoSettings.photoSettings(), delegate=d)
         await d.sig.wait(10)
-    if d.data is None: raise RuntimeError('no photo data')
-    path.write_bytes(bytes(d.data))
+    path.write_bytes(bytes(req(d.data, 'no photo data', RuntimeError)))
     return path
 
 
@@ -81,7 +77,7 @@ async def record(
     await aneed('microphone')
     path = Path(path or tempfile.mktemp(suffix='.m4a'))
     settings = {AVFormatIDKey: int.from_bytes(b'aac ', 'big'), AVSampleRateKey: 44100.0, AVNumberOfChannelsKey: 1}
-    rec = chk(AVAudioRecorder.alloc().initWithURL_settings_error_(nsurl(path), settings, None))
+    rec = AVAudioRecorder(URL=nsurl(path), settings=settings)
     rec.record()
     try: await asyncio.sleep(secs)
     finally: rec.stop()
@@ -94,19 +90,19 @@ async def transcribe(
 ):
     "Speech in `path` as text, via Apple's recognizer"
     await aneed('speech')
-    from Speech import SFSpeechRecognizer, SFSpeechURLRecognitionRequest
-    rec = SFSpeechRecognizer.alloc().init()
-    rec.setQueue_(mk(NSOperationQueue))  # keep handlers off the main queue
-    req = SFSpeechURLRecognitionRequest.alloc().initWithURL_(nsurl(path))
+    rec = SFSpeechRecognizer()
+    rec.queue = NSOperationQueue()  # keep handlers off the main queue
+    sreq = SFSpeechURLRecognitionRequest(URL=nsurl(path))
     got, sig = {}, Sig()
     def cb(res, err):
-        if res is not None and res.isFinal():
-            got['text'] = str(res.bestTranscription().formattedString())
+        res = topy(res)  # a raw block callback is the one path that doesn't cross the bridge: sweep it ourselves
+        if res is not None and res.final:
+            got['text'] = res.bestTranscription.formattedString
             sig.set()
         elif err is not None:
             got.setdefault('err', err)
             sig.set()
-    rec.recognitionTaskWithRequest_resultHandler_(req, cb)
+    rec.recognitionTask(request=sreq, resultHandler=cb)
     await sig.wait(timeout)
     if 'text' not in got: raise RuntimeError(str(got['err']))
     return got['text']

@@ -15,7 +15,7 @@ classifiers = [
   "Programming Language :: Python :: 3 :: Only",
 ]
 
-dependencies = ['cfloop>=0.1.0', 'fastcore>=2.1.14', 'pyobjc-framework-Cocoa>=12.2.1', 'pyobjc-framework-Quartz>=12.2.1',
+dependencies = ['cfloop>=0.1.0', 'fastcocoa>=0.1.0', 'fastcore>=2.1.16', 'iconmage>=0.1.0', 'pyobjc-framework-Cocoa>=12.2.1', 'pyobjc-framework-Quartz>=12.2.1',
     'pyobjc-framework-ApplicationServices>=12.2.1', 'pyobjc-framework-Contacts>=12.2.1',
     'pyobjc-framework-EventKit>=12.2.1', 'pyobjc-framework-Photos>=12.2.1',
     'pyobjc-framework-Speech>=12.2.1', 'pyobjc-framework-AVFoundation>=12.2.1']

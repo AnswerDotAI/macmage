@@ -1,10 +1,10 @@
 "Applications and the desktop"
 
-from AppKit import NSWorkspace, NSWorkspaceOpenConfiguration
-from Foundation import NSURL
-from fastcore.utils import Path
+from fastcore.utils import Path, req
 
-from .cocoa import nsurl
+from fastcocoa import nsurl
+from fastcocoa.appkit import NSWorkspace, NSWorkspaceOpenConfiguration
+from fastcocoa.foundation import NSURL
 
 __all__ = ['open_url', 'open_app', 'frontmost', 'tell']
 
@@ -13,7 +13,7 @@ def open_url(
     url:str # Any URL, including custom schemes an application has registered
 ):
     "Open `url` in whichever application handles it, as clicking a link would"
-    return NSWorkspace.sharedWorkspace().openURL_(NSURL.URLWithString_(url))
+    return NSWorkspace.sharedWorkspace().openURL(NSURL(string=url))
 
 
 def open_app(
@@ -22,19 +22,18 @@ def open_app(
 ):
     "Launch `name`, or bring it to the front when it is already running. Returns the bundle's path"
     ws = NSWorkspace.sharedWorkspace()
-    path = ws.fullPathForApplication_(name)
-    if path is None: raise ValueError(f'No application named {name!r}')
+    path = req(ws.fullPathForApplication(name), f'No application named {name!r}')
     url, cfg = nsurl(path), NSWorkspaceOpenConfiguration.configuration()
-    if paths: ws.openURLs_withApplicationAtURL_configuration_completionHandler_(
-        [nsurl(Path(o).resolve()) for o in paths], url, cfg, None)  # resolve: MacVim mismatches documents opened via a symlink path
-    else: ws.openApplicationAtURL_configuration_completionHandler_(url, cfg, None)
+    if paths: ws.open([nsurl(Path(o).expanduser().resolve()) for o in paths], withApplicationAt=url,
+        configuration=cfg, completionHandler=None)  # resolve: MacVim mismatches documents opened via a symlink path
+    else: ws.openApplication(at=url, configuration=cfg, completionHandler=None)
     return path
 
 
 def frontmost():
     "The frontmost application: a dict of name, bundle_id, and pid. Needs no permission"
-    a = NSWorkspace.sharedWorkspace().frontmostApplication()
-    return dict(name=str(a.localizedName()), bundle_id=str(a.bundleIdentifier()), pid=int(a.processIdentifier()))
+    a = NSWorkspace.sharedWorkspace().frontmostApplication
+    return dict(name=a.localizedName, bundle_id=a.bundleIdentifier, pid=a.processIdentifier)
 
 
 async def tell(

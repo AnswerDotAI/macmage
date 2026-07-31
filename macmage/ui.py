@@ -47,7 +47,7 @@ async def alert(
 
 
 def _pick_keys(items):
-    "Labels and key chars from `_` markers: `('_edit',)` -> `['edit'], 'e'`; the unmarked get spare digits"
+    "Labels and key chars from `_` markers: `('_edit',)` -> `['edit'], 'e'`; the unmarked get spare digits, then letters"
     labels, keys, used = [], [], set()
     for o in items:
         i = str(o).find('_')
@@ -55,15 +55,15 @@ def _pick_keys(items):
         labels.append(str(o)[:i] + str(o)[i+1:] if k else str(o))
         keys.append(k if k and k not in used else None)
         used.update(keys[-1] or ())
-    digits = (d for d in '0123456789' if d not in used)
-    keys = [k or next(digits, None) for k in keys]
-    if None in keys: raise ValueError('more than ten items need `_` keys; only ten digits exist')
+    spares = (d for d in '0123456789abcdefghijklmnopqrstuvwxyz' if d not in used)
+    keys = [k or next(spares, None) for k in keys]
+    if None in keys: raise ValueError('more than 36 items need `_` keys; only digits and letters exist')
     return labels, ''.join(keys)
 
 
 async def pick(
     title:str, # The panel title
-    items:list, # The choices; an item's first `_` claims the next character as its key, the rest get digits
+    items:list, # The choices; an item's first `_` claims the next character as its key, the rest get digits, then letters
     frame:str=None, # An Imp --frame spec
 ):
     "Show a key-driven menu, returning the chosen index, or None when dismissed"

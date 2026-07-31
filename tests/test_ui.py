@@ -13,10 +13,10 @@ def test_notify():
 
 
 def test_pick_rejects_bad_argument_lists():
-    "Imp refuses an empty menu (a dismissal); more than ten unmarked items fail fast in Python"
+    "Imp refuses an empty menu (a dismissal); more than 36 unmarked items fail fast in Python"
     async def main(): return await pick('macmage tests', [])
     assert cfloop.run(main()) is None
-    with pytest.raises(ValueError): cfloop.run(pick('macmage tests', list(range(11))))
+    with pytest.raises(ValueError): cfloop.run(pick('macmage tests', list(range(37))))
 
 
 def test_pick_keys():
