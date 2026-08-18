@@ -5,15 +5,15 @@ import asyncio, tempfile
 from fastcore.utils import *
 from fastcore.aio import athreaded
 from Foundation import NSObject  # raw: delegate subclasses come from unswept NSObject
-from fastcocoa import Sig, camera, nsurl, sortd, topy, wait_cb
-from fastcocoa.avfoundation import AVAudioRecorder, AVCapturePhotoSettings, AVFormatIDKey, AVNumberOfChannelsKey, AVSampleRateKey
+from fastcocoa import Sig, camera, chk, nsurl, sortd, topy, wait_cb
+from fastcocoa.avfoundation import AVAudioConverter, AVAudioEngine, AVAudioFormat, AVAudioPCMBuffer, AVAudioPCMFormatInt16, AVAudioRecorder, AVCapturePhotoSettings, AVFormatIDKey, AVNumberOfChannelsKey, AVSampleRateKey
 from fastcocoa.foundation import NSOperationQueue
 from fastcocoa.photos import PHAsset, PHImageManager
 from fastcocoa.speech import SFSpeechRecognizer, SFSpeechURLRecognitionRequest
 
 from .imp import need, aneed
 
-__all__ = ['photos', 'save_photo', 'snap', 'record', 'transcribe']
+__all__ = ['listen', 'photos', 'save_photo', 'snap', 'record', 'transcribe']
 
 
 def _phdict(a):
@@ -83,6 +83,31 @@ async def record(
     finally: rec.stop()
     return path
 
+
+async def listen(
+    sr:int=24000, # Sample rate of the yielded audio
+    timeout:float=2, # Raise TimeoutError when no audio arrives for this long (a live mic taps even in silence)
+):
+    "Yield mono 16-bit little-endian PCM chunks from the default microphone until the generator is closed"
+    await aneed('microphone')
+    eng = AVAudioEngine()
+    inp = eng.inputNode
+    infmt = inp.outputFormatForBus(0)
+    outfmt = AVAudioFormat(commonFormat=AVAudioPCMFormatInt16, sampleRate=float(sr), channels=1, interleaved=True)
+    conv = AVAudioConverter(fromFormat=infmt, toFormat=outfmt)
+    q,loop = asyncio.Queue(),asyncio.get_running_loop()
+    def tap(buf, when):  # runs on Core Audio's thread; the queue put is the only loop crossing
+        out = AVAudioPCMBuffer(PCMFormat=outfmt, frameCapacity=int(buf.frameLength*sr/infmt.sampleRate)+16)
+        feed = iter([(buf, 0)])  # HaveData once, then NoDataNow: one tap buffer per convert call
+        conv.convertToBuffer_error_withInputFromBlock_(out, None, lambda n, sts: next(feed, (None, 1)))
+        if out.frameLength: loop.call_soon_threadsafe(q.put_nowait, bytes(out.int16ChannelData[0].as_buffer(out.frameLength)))
+    inp.installTapOnBus(0, bufferSize=4096, format=infmt, block=tap)
+    chk(eng.startAndReturnError_(None))
+    try:
+        while True: yield await asyncio.wait_for(q.get(), timeout)
+    finally:
+        inp.removeTapOnBus(0)
+        eng.stop()
 
 async def transcribe(
     path, # An audio file (anything AVFoundation reads)

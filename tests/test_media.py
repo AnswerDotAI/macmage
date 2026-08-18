@@ -7,7 +7,7 @@ import subprocess
 
 import cfloop
 
-from macmage import photos, record, save_photo, snap, transcribe
+from macmage import listen, photos, record, save_photo, snap, transcribe
 
 
 def test_transcribe_knows_what_say_said(tmp_path):
@@ -21,6 +21,18 @@ def test_record_writes_audio(tmp_path):
     "A short recording produces a non-trivial m4a"
     p = cfloop.run(record(0.5, tmp_path/'clip.m4a'))
     assert p.exists() and p.stat().st_size > 1000
+
+
+def test_listen_streams_pcm():
+    "The mic tap yields 16-bit mono PCM at the requested rate until the generator closes"
+    async def main():
+        got = []
+        async for chunk in listen(24000):
+            got.append(chunk)
+            if sum(map(len, got)) >= 24000: break  # half a second of int16 mono
+        return got
+    chunks = cfloop.run(main())
+    assert len(chunks) > 1 and all(len(c)%2 == 0 for c in chunks)
 
 
 def test_snap_captures(tmp_path):
