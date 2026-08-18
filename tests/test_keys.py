@@ -25,7 +25,7 @@ def test_parse_combo():
 SCRIPT = r'''
 import asyncio, threading, time
 from macmage import holdmod, hotkey, leader, modkeys, parse_combo, press, run_loop, stop_keys, unhotkey, unleader, unwatch, watch
-from macmage.keys import _mods_clear, _refs
+from macmage.keys import mods_clear, _refs
 from Quartz import (CGEventCreate, CGEventPost, CGEventSetFlags, CGEventSetIntegerValueField, CGEventSetType,
     kCGEventFlagsChanged, kCGHIDEventTap, kCGKeyboardEventKeycode)
 
@@ -126,7 +126,7 @@ def checks():
     _mod_event(mvk, devmask)
     down_ok = _wait(lambda: mgot==['down'])
     _mod_event(mvk, 0)
-    ok('holdmod', down_ok and _wait(lambda: mgot==['down','up']) and _wait(_mods_clear))
+    ok('holdmod', down_ok and _wait(lambda: mgot==['down','up']) and _wait(mods_clear))
 
 
 def worker():

@@ -16,7 +16,7 @@ from ._hitoolbox import (EventTypeSpec, GetEventDispatcherTarget, GetEventKind, 
 from .imp import need, aneed
 from .util import wait_until
 
-__all__ = ['mods', 'specials', 'char2vk', 'parse_combo', 'hotkey', 'unhotkey', 'leader', 'unleader', 'watch', 'unwatch', 'modkeys', 'holdmod', 'unholdmod', 'press', 'stop_keys', 'run_loop', 'type_text']
+__all__ = ['mods', 'specials', 'char2vk', 'parse_combo', 'hotkey', 'unhotkey', 'leader', 'unleader', 'watch', 'unwatch', 'mods_clear', 'modkeys', 'holdmod', 'unholdmod', 'press', 'stop_keys', 'run_loop', 'type_text']
 
 mods = dict(cmd=256, command=256, shift=512, opt=2048, option=2048, alt=2048, ctrl=4096, control=4096)
 
@@ -30,7 +30,7 @@ _cgflags = {256: kCGEventFlagMaskCommand, 512: kCGEventFlagMaskShift,
     2048: kCGEventFlagMaskAlternate, 4096: kCGEventFlagMaskControl}
 
 
-def _mods_clear():
+def mods_clear():
     "Whether no modifier key is physically held right now"
     return not CGEventSourceFlagsState(kCGEventSourceStateHIDSystemState) & sum(_cgflags.values())
 
@@ -377,7 +377,7 @@ async def type_text(
     "Type `s` into the focused application, one synthetic keystroke per chunk; needs Accessibility"
     await aneed('accessibility')
     end = time.monotonic()+1  # applications read live modifier state when interpreting a unicode event, so text typed while the triggering hotkey is still held arrives mangled or not at all
-    while not _mods_clear() and time.monotonic() < end: await asyncio.sleep(0.01)
+    while not mods_clear() and time.monotonic() < end: await asyncio.sleep(0.01)
     for i in range(0, len(s), 16):
         chunk = s[i:i+16]
         for down in (True, False):
