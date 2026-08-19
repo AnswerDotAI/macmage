@@ -2,7 +2,8 @@
 default, since a suite that fires banners at you is a suite you stop running."""
 import asyncio, cfloop, pytest
 
-from macmage import badge, imp_check, notify, pick
+from macmage import badge, imp_check, keywisp, notify, pick
+from macmage.imp import Imp
 
 
 @pytest.mark.visible
@@ -48,3 +49,19 @@ def test_badge_survives_early_process_death():
             await b.set('z')
         return b
     assert cfloop.run(main()).dismissed
+
+
+@pytest.mark.skipif('takes --key' not in Imp(help=True).stdout, reason='installed Imp has no --key yet')
+def test_keywisp_round_trip(tmp_path):
+    "A key wisp shows a page, evaluates our JS in it, and returns what the page posts back"
+    f = tmp_path/'k.html'
+    f.write_text('<body></body>')
+    async def main():
+        async with keywisp(f, title='macmage tests') as w:
+            await asyncio.sleep(1)  # JS evaluated before the page loads is lost
+            it = w.lines()
+            await w.eval("webkit.messageHandlers.imp.postMessage('hi')")
+            line = await asyncio.wait_for(anext(it), 5)
+        return w, line
+    w, line = cfloop.run(main())
+    assert line == 'hi' and not w.dismissed and w.p.returncode == 0

@@ -1,13 +1,13 @@
 "Showing things to the user: wisps through Imp, because only a bundled app may, and sounds locally"
 
-import asyncio
+import asyncio, json
 from contextlib import asynccontextmanager, suppress
 
 from AppKit import NSSound
 
 from .imp import aimp as _imp, _argv
 
-__all__ = ['notify', 'alert', 'pick', 'show', 'web', 'badge', 'tone']
+__all__ = ['notify', 'alert', 'pick', 'show', 'web', 'badge', 'keywisp', 'tone']
 
 
 def _frame(frame): return dict(frame=frame) if frame else {}
@@ -110,3 +110,46 @@ async def badge(
         with suppress(BrokenPipeError, ConnectionResetError): p.stdin.close()
         await p.wait()
         if p.returncode == 2: b.dismissed = True
+
+
+class KeyWisp:
+    "A key wisp on a leash, from `keywisp`: `eval` runs JS in the page, `call` runs one of its functions, `lines` yields what it posts back; `dismissed` reports the close button"
+    def __init__(self, p): self.p, self.dismissed = p, False
+    async def eval(self,
+        js:str # A line of JavaScript to evaluate in the page
+    ):
+        "Run `js` in the page; after the wisp is gone, records dismissal instead of raising"
+        try:
+            self.p.stdin.write((js+'\n').encode())
+            await self.p.stdin.drain()
+        except (BrokenPipeError, ConnectionResetError): self.dismissed = True
+    async def call(self,
+        fn:str, # Page function to call
+        *args # Its arguments, JSON-encoded
+    ):
+        "Call the page's `fn` with `args`: the live-web idiom, where the page defines the functions and the caller sends calls"
+        await self.eval(f"{fn}({', '.join(json.dumps(a) for a in args)})")
+    async def lines(self):
+        "Lines the page posts via webkit.messageHandlers.imp.postMessage, until the wisp closes"
+        while line := await self.p.stdout.readline(): yield line.decode().rstrip('\n')
+    async def close(self):
+        "Close the panel now, without waiting for the block to end"
+        with suppress(BrokenPipeError, ConnectionResetError): self.p.stdin.close()
+        await self.p.wait()
+
+
+@asynccontextmanager
+async def keywisp(
+    target:str, # A URL, or a path to a local file to display
+    title:str='macmage', # The panel title
+    frame:str=None, # An Imp --frame spec
+    cls=KeyWisp, # Class of the yielded wisp, for pages with their own protocol
+):
+    "A live web wisp that takes the keyboard while the previous app stays frontmost; ending the block closes it"
+    p = await asyncio.create_subprocess_exec(*_argv(web=(title, str(target)), live=True, key=True, **_frame(frame)),
+        stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE)
+    w = cls(p)
+    try: yield w
+    finally:
+        await w.close()
+        w.dismissed = p.returncode == 2
