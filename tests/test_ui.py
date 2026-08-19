@@ -3,7 +3,6 @@ default, since a suite that fires banners at you is a suite you stop running."""
 import asyncio, cfloop, pytest
 
 from macmage import badge, imp_check, keywisp, notify, pick
-from macmage.imp import Imp
 
 
 @pytest.mark.visible

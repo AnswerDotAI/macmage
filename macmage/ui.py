@@ -129,7 +129,7 @@ class KeyWisp:
             self.dismissed = self.p.returncode == 2
     async def call(self,
         fn:str, # Page function to call
-        *args # Its arguments, JSON-encoded
+        *args # Its arguments, JSON-serializable
     ):
         "Call the page's `fn` with `args`: the live-web idiom, where the page defines the functions and the caller sends calls"
         await self.eval(f"{fn}({', '.join(json.dumps(a) for a in args)})")
