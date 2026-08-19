@@ -40,7 +40,7 @@ def test_badge_round_trip(tmp_path):
 
 
 def test_badge_survives_early_process_death():
-    "set() after the wisp is gone records dismissal instead of raising"
+    "set() after the wisp is gone records whether it was dismissed instead of raising"
     async def main():
         async with badge('x', title='macmage tests') as b:
             b.p.kill()
@@ -48,7 +48,7 @@ def test_badge_survives_early_process_death():
             await b.set('y')
             await b.set('z')
         return b
-    assert cfloop.run(main()).dismissed
+    assert not cfloop.run(main()).dismissed
 
 
 def test_keywisp_round_trip(tmp_path):

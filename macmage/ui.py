@@ -91,7 +91,9 @@ class Badge:
         try:
             self.p.stdin.write(f'{text}\n'.encode())
             await self.p.stdin.drain()
-        except (BrokenPipeError, ConnectionResetError): self.dismissed = True
+        except (BrokenPipeError, ConnectionResetError):
+            await self.p.wait()
+            self.dismissed = self.p.returncode == 2
 
 
 @asynccontextmanager
@@ -118,11 +120,13 @@ class KeyWisp:
     async def eval(self,
         js:str # A line of JavaScript to evaluate in the page
     ):
-        "Run `js` in the page; after the wisp is gone, records dismissal instead of raising"
+        "Run `js` in the page; after the wisp is gone, records whether it was dismissed instead of raising"
         try:
             self.p.stdin.write((js+'\n').encode())
             await self.p.stdin.drain()
-        except (BrokenPipeError, ConnectionResetError): self.dismissed = True
+        except (BrokenPipeError, ConnectionResetError):
+            await self.p.wait()
+            self.dismissed = self.p.returncode == 2
     async def call(self,
         fn:str, # Page function to call
         *args # Its arguments, JSON-encoded
