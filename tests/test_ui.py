@@ -51,7 +51,6 @@ def test_badge_survives_early_process_death():
     assert cfloop.run(main()).dismissed
 
 
-@pytest.mark.skipif('takes --key' not in Imp(help=True).stdout, reason='installed Imp has no --key yet')
 def test_keywisp_round_trip(tmp_path):
     "A key wisp shows a page, evaluates our JS in it, and returns what the page posts back"
     f = tmp_path/'k.html'
