@@ -145,7 +145,7 @@ open_app('Ghostty')
 ## Telling you something
 
 ```python
-from macmage import alert, badge, notify, pick, show, tone, web
+from macmage import alert, badge, keywisp, notify, pick, show, tone, web
 
 await notify('macmage', 'clipboard cleaned')
 if await alert('Delete everything?', 'This cannot be undone.', 'Delete', 'Cancel') == 0: wipe()
@@ -156,11 +156,17 @@ await web('https://answer.ai')
 async with badge('🎙 recording') as b:
     ...
     await b.set('🎙 0:42')
+
+async with keywisp('page.html', title='notes') as w:
+    await w.call('handle', {'text': 'hello'})
+    async for message in w.messages(): ...
 ```
 
 A background agent has nowhere to print, and macOS will not let an unbundled process speak to the user at all. Notification Center refuses a process with no bundle, and a window needs an application to own it. These helpers delegate the job to Imp, which is one. `notify` posts a banner and returns at once. `alert` returns the button index once dismissed. `show` displays text monospaced, scrollable, and selectable, so long output needs neither an alert's single box nor the clipboard. `pick` shows a key-driven menu, returns the chosen index, and returns `None` when dismissed. An item's first `_` marks the next character as its key (`_ship it` answers to `s`), and the menu assigns digits to the rest. `web` shows a page or local file. `pick`, `show`, and `web` take `frame=` to place the panel: `'tr'` pins it to the top-right corner of the screen, `'400x300'` sizes it, `'400x300@br'` both. Esc or the close button dismisses any of them. Imp calls these panels wisps: transient windows that pop up, serve, and go away. All the helpers are coroutines. A wisp waits for a person to respond, so awaiting it parks only that cantrip, and every other trigger stays live while a panel is up.
 
 `badge` is the exception to "takes an answer": a floating corner lamp that never takes focus, alive for its `async with` block. `set` replaces its text, and closing the block removes it. If the person closes it first, `b.dismissed` goes true instead of an error, so an update loop can stop cleanly. The example config's timer (`ctrl-alt-cmd-t`) is the demo. A badge shows a stopwatch or countdown while you keep typing.
+
+`keywisp` is a live web page you can type into. It takes the keyboard without bringing its application frontmost, so the app you were using keeps its place. Entering its `async with` waits until the page has loaded, so `call` can immediately invoke one of the page's global functions with JSON arguments; `eval` is the raw one-line JavaScript form. The page answers with `webkit.messageHandlers.imp.postMessage(value)`, and `messages` yields the posted strings, numbers, lists, and dictionaries as Python values. Closing the block closes the page; if the person closes it first, `w.dismissed` becomes true before `messages` ends. An Imp crash raises `ImpError` rather than pretending to be a dismissal.
 
 `tone()` plays a short system sound (`tone('Basso')` for any name in `/System/Library/Sounds`), for moments a banner would be too much. The example config's timer rings one before its alert. It is sync and instant, like `press`, since sound needs no bundle and takes no answer.
 

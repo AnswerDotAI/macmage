@@ -1,13 +1,13 @@
 "Showing things to the user: wisps through Imp, because only a bundled app may, and sounds locally"
 
-import asyncio
+import asyncio, json
 from contextlib import asynccontextmanager, suppress
 
 from AppKit import NSSound
 
-from .imp import aimp as _imp, _argv
+from .imp import ImpError, aimp as _imp, _argv
 
-__all__ = ['notify', 'alert', 'pick', 'show', 'web', 'badge', 'tone']
+__all__ = ['notify', 'alert', 'pick', 'show', 'web', 'badge', 'keywisp', 'tone']
 
 
 def _frame(frame): return dict(frame=frame) if frame else {}
@@ -91,7 +91,14 @@ class Badge:
         try:
             self.p.stdin.write(f'{text}\n'.encode())
             await self.p.stdin.drain()
-        except (BrokenPipeError, ConnectionResetError): self.dismissed = True
+        except (BrokenPipeError, ConnectionResetError): await _wisp_done(self)
+
+
+async def _wisp_done(w):
+    "Record a person's dismissal, and expose every other abnormal Imp exit"
+    await w.p.wait()
+    w.dismissed = w.p.returncode == 2
+    if w.p.returncode not in (0, 2): raise ImpError(f'Imp {type(w).__name__} exited with status {w.p.returncode}')
 
 
 @asynccontextmanager
@@ -106,7 +113,71 @@ async def badge(
     try:
         if text: await b.set(text)
         yield b
-    finally:
+    except BaseException:
         with suppress(BrokenPipeError, ConnectionResetError): p.stdin.close()
         await p.wait()
-        if p.returncode == 2: b.dismissed = True
+        raise
+    else:
+        with suppress(BrokenPipeError, ConnectionResetError): p.stdin.close()
+        await _wisp_done(b)
+
+
+class KeyWisp:
+    "A keyboard-taking live page: `eval`/`call` drive it, `messages` yields values it posts back"
+    def __init__(self, p): self.p, self.dismissed = p, False
+    async def _ready(self):
+        "Wait until the page is loaded and its functions are safe to call"
+        line = await self.p.stdout.readline()
+        if not line:
+            await self.p.wait()
+            raise ImpError(f'Imp exited before the key wisp was ready (status {self.p.returncode}); update Imp')
+        try: event = json.loads(line)
+        except json.JSONDecodeError as e: raise ImpError('Imp does not support the key wisp protocol; update Imp') from e
+        if event != {'kind': 'ready'}: raise ImpError(f'Imp sent {event!r} before the key wisp was ready')
+    async def eval(self,
+        js:str # One line of JavaScript to evaluate in the page
+    ):
+        "Evaluate one line of JavaScript; a dismissed panel makes later calls no-ops"
+        if '\n' in js or '\r' in js: raise ValueError('keywisp.eval needs one line of JavaScript')
+        if self.dismissed: return
+        try:
+            self.p.stdin.write((js+'\n').encode())
+            await self.p.stdin.drain()
+        except (BrokenPipeError, ConnectionResetError): await _wisp_done(self)
+    async def call(self,
+        fn:str, # Name of a global page function
+        *args # Its JSON-serializable arguments
+    ):
+        "Call the global page function `fn` with JSON-serializable `args`"
+        await self.eval(f"globalThis[{json.dumps(fn)}]({', '.join(json.dumps(a) for a in args)})")
+    async def messages(self):
+        "Values posted with webkit.messageHandlers.imp.postMessage, until the wisp closes"
+        while line := await self.p.stdout.readline():
+            event = json.loads(line)
+            if event.get('kind') != 'message': raise ImpError(f'unknown Imp key wisp event: {event!r}')
+            yield event.get('value')
+        await _wisp_done(self)
+    async def close(self):
+        "Close the panel and wait for Imp to finish"
+        with suppress(BrokenPipeError, ConnectionResetError): self.p.stdin.close()
+        await _wisp_done(self)
+
+
+@asynccontextmanager
+async def keywisp(
+    target:str, # A URL, or a path to a local file to display
+    title:str='macmage', # The panel title
+    frame:str=None, # An Imp --frame spec
+):
+    "A live web wisp that takes the keyboard while the previous app stays frontmost"
+    p = await asyncio.create_subprocess_exec(*_argv(web=(title, str(target)), live=True, key=True, **_frame(frame)),
+        stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE)
+    w = KeyWisp(p)
+    try:
+        await w._ready()
+        yield w
+    except BaseException:
+        with suppress(BrokenPipeError, ConnectionResetError): p.stdin.close()
+        await p.wait()
+        raise
+    else: await w.close()
