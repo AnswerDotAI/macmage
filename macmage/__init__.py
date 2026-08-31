@@ -1,6 +1,7 @@
 from fastcore.utils import *
 from fastcore.xdg import *
 from fastcore.script import call_parse
+from dotenv import load_dotenv
 import asyncio, importlib, inspect, json, plistlib, re, select, threading, time, traceback
 from .util import *
 from .app import *
@@ -72,7 +73,9 @@ def _load_config():
     loop = asyncio.get_running_loop()
     _watch_config(loop)
     sys.path.insert(0, str(config_dir))
-    try: importlib.import_module('config')
+    try:
+        load_dotenv(config_dir/'.env', override=False)
+        importlib.import_module('config')
     except Exception as e:
         _log_exc(e, 'config')
         # The panel is the answer to "did my save load?", as a task so the loop still runs and the

@@ -1,14 +1,28 @@
-"""The config watcher: a change to a watched file must wake the loop after `_watch_config`
-returns - which is exactly when a locally-held kqueue would be garbage-collected and its
-fd silently closed (the bug that shipped: the agent never reloaded on config saves)."""
-import asyncio, gc
+"Loading and watching agent configuration."
+import asyncio, gc, os
 
 import cfloop
 
 import macmage
 
 
+def test_config_loads_dotenv_without_overriding_environment(tmp_path, monkeypatch):
+    "The agent's environment file is loaded before config, while inherited values win"
+    (tmp_path/'.env').write_text('FROM_DOTENV=loaded\nALREADY_SET=from-file\n')
+    monkeypatch.setattr(macmage, 'config_dir', tmp_path)
+    monkeypatch.setattr(macmage, '_watch_config', lambda loop: None)
+    monkeypatch.setenv('ALREADY_SET', 'inherited')
+    monkeypatch.delenv('FROM_DOTENV', raising=False)
+    seen = []
+    def import_config(name): seen.append((os.environ['FROM_DOTENV'], os.environ['ALREADY_SET']))
+    monkeypatch.setattr(macmage.importlib, 'import_module', import_config)
+    async def main(): macmage._load_config()
+    asyncio.run(main())
+    assert seen == [('loaded', 'inherited')]
+
+
 def test_watch_config_fires_after_return(tmp_path, monkeypatch):
+    "A config write wakes the loop after `_watch_config` returns, so its kqueue must remain referenced"
     (tmp_path/'config.py').write_text('x = 1\n')
     monkeypatch.setattr(macmage, 'config_dir', tmp_path)
     fired = []

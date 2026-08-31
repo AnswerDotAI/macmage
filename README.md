@@ -37,6 +37,14 @@ from macmage import mage, type_text
 async def today(): await type_text(date.today().isoformat())
 ```
 
+A LaunchAgent does not read shell startup files. Put any environment variables the configuration needs in `$XDG_CONFIG_HOME/macmage/.env`, normally `~/.config/macmage/.env`:
+
+```dotenv
+GEMINI_API_KEY=your-api-key
+```
+
+macmage loads this file before `config.py`, without replacing variables already present in the process environment. Run `macmage --install` after changing `.env`; a `config.py` save re-executes the existing process environment and therefore does not refresh it.
+
 `today` here is a cantrip: a small function bound to a trigger, which is all any macmage configuration is. The triggers are hotkeys (`keys=`), held modifiers (`holdmod`), leader keys (`leader`), and clipboard changes (`watch_clip`). The actions are whatever Python you like, with typing, clipboard, application, and panel helpers below. `@mage` wraps a cantrip so an exception is logged instead of stopping the process. A cantrip may be `async def`. The agent runs on an `asyncio` loop (via [cfloop](https://github.com/AnswerDotAI/cfloop)), so async cantrips run concurrently as tasks, while plain ones run inline and should stay quick, since a slow one delays every other trigger. `hold=True` takes a generator, sync or async, for cantrips that run while the key is held. The `cantrips/` directory in the repo holds ready-made ones, written to be copied next to `config.py` and imported from it.
 
 `config.py` need not block. `macmage` keeps the process alive, and re-executes it whenever any `.py` file in the configuration directory changes, so a bare `touch` reloads it. An error while loading it is logged to `stderr.log` and shown in a panel with the traceback. The process then waits for the next change rather than exiting, so a panel means your save did not load. The configuration can import sibling files from its directory as ordinary Python modules.
