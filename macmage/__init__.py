@@ -1,3 +1,5 @@
+__version__ = "0.1.1"
+
 from fastcore.utils import *
 from fastcore.xdg import *
 from fastcore.script import call_parse
@@ -13,7 +15,6 @@ from .pim import *
 from .media import *
 from .imp import ImpError, agent, agent_state, Imp, aimp, imp_check, install_msg, launcher, unagent, as_imp, need
 
-__version__ = "0.1.0"
 
 name = 'macmage'
 label = f'com.answerdotai.{name}'
