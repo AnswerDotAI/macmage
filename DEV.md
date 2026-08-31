@@ -15,6 +15,7 @@ These were verified under the pre-Imp stack (MacMage.app, pynput); the mechanism
 ## Gotchas
 
 - Run in the foreground (bare `macmage`), TCC attributes to the terminal app, not Imp, so `need()` raises; run it as `Imp macmage` to match production. Tests likewise: `Imp pytest`.
+- `$XDG_CONFIG_HOME/macmage/.env` is loaded before config.py without overriding the process environment. A config reload uses `execv`, so `.env` changes require `macmage --install` rather than a config save; this keeps foreground shell variables authoritative and avoids trying to reconcile removed variables across execs.
 - The clipboard-watcher test 'flake' (four suite-run failures, always passing standalone) was a real race, fixed 2026-07-29: `_clip_poll` read its baseline `changeCount` on the poll thread, so a `set_clip` racing the thread's start was folded into the baseline and never reported. Baselines for polling threads get read synchronously, before the thread starts.
 
 ## Deferred ideas
