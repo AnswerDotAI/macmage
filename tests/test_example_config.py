@@ -7,6 +7,7 @@ from pathlib import Path
 import macmage
 
 CFG = Path(__file__).parent.parent/'examples'/'config.py'
+CANTRIPS = CFG.parent.parent/'cantrips'
 
 
 def test_example_config_compiles_and_imports_resolve():
@@ -16,3 +17,8 @@ def test_example_config_compiles_and_imports_resolve():
     names = [a.name for n in imports for a in n.names if a.name != '*']
     missing = [o for o in names if not hasattr(macmage, o)]
     assert not missing, f'example config imports names macmage does not export: {missing}'
+
+
+def test_cantrips_compile():
+    "Every ready-made cantrip is valid Python without registering its live bindings here"
+    for f in CANTRIPS.glob('*.py'): ast.parse(f.read_text(), str(f))

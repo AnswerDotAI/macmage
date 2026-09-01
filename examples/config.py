@@ -50,32 +50,8 @@ leader('ctrl-alt-cmd-a', dict(g=partial(open_app, 'Ghostty'), s=partial(open_app
     v=partial(open_app, 'MacVim'), c=partial(open_app, 'Google Chrome')))
 
 
-# Spaces: Option-number focuses one; adding Shift moves the current window there and follows it.
-class Yabai:
-    def __getattr__(self, command):
-        async def run(**opts):
-            cmd = ['/opt/homebrew/bin/yabai', '-m', command.replace('_', '-')]
-            for k,v in opts.items():
-                cmd.append(f'--{k.replace("_", "-")}')
-                if v is not True: cmd.append(str(v))
-            p = await asyncio.create_subprocess_exec(*cmd)
-            if await p.wait(): raise subprocess.CalledProcessError(p.returncode, cmd)
-        return run
-yabai = Yabai()
-
-@mage(keys='ctrl-left')
-async def previous_space(): await yabai.space(focus='prev')
-
-@mage(keys='ctrl-right')
-async def next_space(): await yabai.space(focus='next')
-
-def bind_space(i):
-    async def focus(): await yabai.space(focus=i)
-    async def move(): await yabai.window(space=i, focus=True)
-    mage(focus, keys=f'alt-{i}')
-    mage(move, keys=f'alt-shift-{i}')
-
-for i in range(1, 10): bind_space(i)
+# Copy or symlink cantrips/yabai_spaces.py beside config.py to enable these space bindings.
+import yabai_spaces
 
 
 # macmage itself: one hotkey, then a menu.
@@ -170,5 +146,5 @@ async def demo():
 
 
 # Site-local additions that do not belong in the repo: create config_local.py beside config.py
-try: import config_local  # chkstyle: ignore - the side-effect import is the mechanism
+try: import config_local
 except ImportError: pass

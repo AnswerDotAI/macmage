@@ -6,7 +6,8 @@ from fastcore.utils import *
 from fastcore.aio import athreaded
 from Foundation import NSObject  # raw: delegate subclasses come from unswept NSObject
 from fastcocoa import Sig, camera, chk, nsurl, sortd, topy, wait_cb
-from fastcocoa.avfoundation import AVAudioConverter, AVAudioEngine, AVAudioFormat, AVAudioPCMBuffer, AVAudioPCMFormatInt16, AVAudioRecorder, AVCapturePhotoSettings, AVFormatIDKey, AVNumberOfChannelsKey, AVSampleRateKey
+from fastcocoa.avfoundation import (AVAudioConverter, AVAudioEngine, AVAudioFormat, AVAudioPCMBuffer, AVAudioPCMFormatInt16,
+    AVAudioRecorder, AVCapturePhotoSettings, AVFormatIDKey, AVNumberOfChannelsKey, AVSampleRateKey)
 from fastcocoa.foundation import NSOperationQueue
 from fastcocoa.photos import PHAsset, PHImageManager
 from fastcocoa.speech import SFSpeechRecognizer, SFSpeechURLRecognitionRequest
