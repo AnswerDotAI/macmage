@@ -8,7 +8,7 @@ from macmage import *
 state = Path('~/.local/state/macmage').expanduser()
 
 
-@mage(keys='alt-`')
+@mage(keys='ctrl-`')
 async def backticks(): await type_text('`​``')
 
 @mage(keys='ctrl-shift-a')

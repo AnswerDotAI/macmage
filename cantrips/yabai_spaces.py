@@ -36,8 +36,8 @@ async def next_space(): await yabai.space(focus='next')
 def bind_space(i):
     async def focus(): await yabai.space(focus=i)
     async def move(): await yabai.window(space=i, focus=True)
-    mage(focus, keys=f'alt-{i}')
-    mage(move, keys=f'alt-shift-{i}')
+    mage(focus, keys=f'ctrl-{i}')
+    mage(move, keys=f'ctrl-shift-{i}')
 
 
 for i in range(1, 10): bind_space(i)
