@@ -51,7 +51,7 @@ leader('ctrl-alt-cmd-a', dict(g=partial(open_app, 'Ghostty'), s=partial(open_app
 
 
 # Copy or symlink cantrips/yabai_spaces.py beside config.py to enable these space bindings.
-import yabai_spaces
+#import yabai_spaces
 
 
 # macmage itself: one hotkey, then a menu.
