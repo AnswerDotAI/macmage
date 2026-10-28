@@ -1,51 +1,30 @@
-"""Recording, transcription, and photo metadata against the real devices and library, so
-these need Imp's `microphone`, `speech`, and `photos` grants. `say` synthesizes known
-speech, giving the transcription check ground truth without anyone talking. The capture
-trio is async, so these tests run it under cfloop, which also exercises the loop's
-main-queue drain (the capture delegate arrives that way)."""
+"Native recording, streaming, recognition and photo export, expressed through macmage's Python API."
 import subprocess
 
-import cfloop
+import cfloop, pytest
+from macmage import listen, photos, record, save_photo, transcribe
 
-from macmage import listen, photos, record, save_photo, snap, transcribe
 
-
-def test_transcribe_knows_what_say_said(tmp_path):
-    "Apple's recognizer round-trips Apple's synthesizer"
+def test_audio(tmp_path):
     aiff = tmp_path/'hello.aiff'
     subprocess.run(['say', '-o', str(aiff), 'hello world'], check=True)
-    assert 'hello' in cfloop.run(transcribe(aiff)).lower()
-
-
-def test_record_writes_audio(tmp_path):
-    "A short recording produces a non-trivial m4a"
-    p = cfloop.run(record(0.5, tmp_path/'clip.m4a'))
-    assert p.exists() and p.stat().st_size > 1000
-
-
-def test_listen_streams_pcm():
-    "The mic tap yields 16-bit mono PCM at the requested rate until the generator closes"
-    async def main():
-        got = []
+    async def story():
+        assert 'hello' in (await transcribe(aiff)).lower()
+        recording = await record(0.5, tmp_path/'clip.m4a')
+        assert recording.stat().st_size > 1000
+        chunks = []
         async for chunk in listen(24000):
-            got.append(chunk)
-            if sum(map(len, got)) >= 24000: break  # half a second of int16 mono
-        return got
-    chunks = cfloop.run(main())
-    assert len(chunks) > 1 and all(len(c)%2 == 0 for c in chunks)
+            chunks.append(chunk)
+            if sum(map(len, chunks)) >= 24000: break
+        assert len(chunks) > 1 and all(len(chunk)%2 == 0 for chunk in chunks)
+    cfloop.run(story())
 
 
-def test_snap_captures(tmp_path):
-    "The camera delivers a real still through the loop's own main-queue drain"
-    assert cfloop.run(snap(tmp_path/'a.jpg')).stat().st_size > 10000
-
-
-def test_photos_metadata(tmp_path):
-    "The newest assets carry ids and sizes, and one exports as real image data"
-    async def main():
-        ps = await photos(3)
-        for p in ps: assert p['id'] and p['w'] > 0 and p['h'] > 0
-        if ps:
-            f = await save_photo(ps[0]['id'], tmp_path/'photo')
-            assert f.stat().st_size > 1000
-    cfloop.run(main())
+def test_photo_export(tmp_path):
+    async def story():
+        assets = await photos(3)
+        if not assets: pytest.skip('photo library is empty')
+        for photo in assets: assert photo['id'] and photo['w'] > 0 and photo['h'] > 0
+        exported = await save_photo(assets[0]['id'], tmp_path/'photo')
+        assert exported.stat().st_size > 1000
+    cfloop.run(story())

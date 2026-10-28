@@ -39,10 +39,6 @@ version = { attr = "macmage.__version__" }
 [tool.setuptools.packages.find]
 include = ["macmage"]
 
-[tool.pytest.ini_options]
-markers = ["visible: puts something on screen; deselected by default"]
-addopts = "-m 'not visible'"
-
 [tool.chkstyle]
 # The generated pyobjc bridge files keep pyobjc's own formatting.
 skip_paths = ['macmage/_metadata.py', 'macmage/_hitoolbox.py', 'examples/config.py']
